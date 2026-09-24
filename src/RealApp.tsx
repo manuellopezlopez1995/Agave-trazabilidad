@@ -1,5 +1,5 @@
 import React,{useCallback,useEffect,useState} from 'react';
-import {ActivityIndicator,Alert,Linking,Platform,Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
+import {ActivityIndicator,Alert,Image,Linking,Platform,Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
 import {Session} from '@supabase/supabase-js';
 import {supabase} from './backend';
 import {captureEvidence} from './evidence';
@@ -37,6 +37,7 @@ export default function RealApp(){
  const [tripLotId,setTripLotId]=useState(''),[tripDriverId,setTripDriverId]=useState(''),[destination,setDestination]=useState('Destino de prueba');
  const [gross,setGross]=useState(''),[tare,setTare]=useState(''),[ticketNumber,setTicketNumber]=useState('');
  const [receiver,setReceiver]=useState(''),[accepted,setAccepted]=useState(''),[rejected,setRejected]=useState(''),[rejectionReason,setRejectionReason]=useState('');
+ const [photoUrl,setPhotoUrl]=useState('');
  useEffect(()=>{if(!supabase)return;supabase.auth.getSession().then(({data:{session},error})=>{if(error)setError(error.message);setSession(session);setLoading(false)});const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{setSession(next);if(!next){setProfile(null);setOrganizationId('');setFarms([]);setCrews([]);setHarvests([]);setLots([]);setTrips([]);setTripLots([]);setDeliveries([]);setWeighings([]);setHarvestPhotos([]);setDeliveryPhotos([]);setDrivers([])}});return()=>subscription.unsubscribe()},[]);
  const load=useCallback(async()=>{if(!supabase||!session)return;setError('');try{
   const {data:p,error:pe}=await supabase.from('profiles').select('id,full_name,role,status').eq('id',session.user.id).single();check(pe);if(!p||p.status!=='ACTIVE')throw Error('Tu perfil no está activo.');setProfile(p as Profile);
@@ -78,7 +79,13 @@ export default function RealApp(){
    const {error}=await supabase.from('delivery_evidence').insert({delivery_id:id,evidence_type:'PHOTO',storage_bucket:photo.bucket,storage_path:photo.path,mime_type:photo.mimeType,file_size_bytes:photo.size,captured_at:photo.capturedAt,uploaded_by:session.user.id});check(error);
   }
  });
- const openPhoto=(bucket:string,path:string)=>action(async()=>{if(!supabase)throw Error('Falta configurar Supabase');const {data,error}=await supabase.storage.from(bucket).createSignedUrl(path,60);check(error);if(data?.signedUrl)await Linking.openURL(data.signedUrl)});
+ const openPhoto=(bucket:string,path:string)=>action(async()=>{
+  if(!supabase)throw Error('Falta configurar Supabase');
+  const {data,error}=await supabase.storage.from(bucket).createSignedUrl(path,300);check(error);
+  if(!data?.signedUrl)throw Error('No se pudo obtener la fotografía');
+  if(Platform.OS==='web')setPhotoUrl(data.signedUrl);
+  else await Linking.openURL(data.signedUrl);
+ });
  const createTrip=()=>action(async()=>{
   if(!supabase||!session||!organizationId)throw Error('Sesión inválida');const lot=lots.find(l=>l.id===tripLotId);
   if(!lot||!tripDriverId)throw Error('Selecciona lote y chofer');const destinationName=requiredText(destination,'Destino',120);
@@ -166,6 +173,8 @@ export default function RealApp(){
    </>}
   </View>)}
  </>}
- {busy&&<ActivityIndicator color={green}/>}</ScrollView></SafeAreaView>
+ {busy&&<ActivityIndicator color={green}/>}</ScrollView>
+ {photoUrl?<View style={styles.photoOverlay}><Button label="Cerrar fotografía" onPress={()=>setPhotoUrl('')}/><Image source={{uri:photoUrl}} resizeMode="contain" style={styles.photoPreview} onError={()=>{setPhotoUrl('');showError('No se pudo cargar la fotografía. Intenta abrirla de nuevo.')}}/></View>:null}
+ </SafeAreaView>
 }
-const styles=StyleSheet.create({root:{flex:1,backgroundColor:'#F8FAF8'},center:{flex:1,justifyContent:'center'},body:{padding:22,paddingBottom:65,gap:13},brand:{fontSize:15,fontWeight:'900',color:green,letterSpacing:3,marginTop:18},title:{fontSize:26,fontWeight:'800',color:'#173027',marginVertical:10},heading:{fontWeight:'700',fontSize:18,color:'#173027'},small:{color:'#60746A'},label:{fontWeight:'700',color:'#173027',marginBottom:5},input:{backgroundColor:'white',borderWidth:1,borderColor:'#CCD8CF',borderRadius:10,padding:13,fontSize:16},button:{backgroundColor:green,padding:13,borderRadius:12,marginTop:4,alignSelf:'stretch'},buttonText:{color:'white',textAlign:'center',fontWeight:'700'},card:{backgroundColor:'white',padding:16,borderRadius:13,borderColor:'#E1E9E3',borderWidth:1,gap:6},row:{flexDirection:'row',gap:10},error:{color:'#9B2424',backgroundColor:'#FCE9E9',padding:12,borderRadius:10}});
+const styles=StyleSheet.create({root:{flex:1,backgroundColor:'#F8FAF8'},center:{flex:1,justifyContent:'center'},body:{padding:22,paddingBottom:65,gap:13},brand:{fontSize:15,fontWeight:'900',color:green,letterSpacing:3,marginTop:18},title:{fontSize:26,fontWeight:'800',color:'#173027',marginVertical:10},heading:{fontWeight:'700',fontSize:18,color:'#173027'},small:{color:'#60746A'},label:{fontWeight:'700',color:'#173027',marginBottom:5},input:{backgroundColor:'white',borderWidth:1,borderColor:'#CCD8CF',borderRadius:10,padding:13,fontSize:16},button:{backgroundColor:green,padding:13,borderRadius:12,marginTop:4,alignSelf:'stretch'},buttonText:{color:'white',textAlign:'center',fontWeight:'700'},card:{backgroundColor:'white',padding:16,borderRadius:13,borderColor:'#E1E9E3',borderWidth:1,gap:6},row:{flexDirection:'row',gap:10},error:{color:'#9B2424',backgroundColor:'#FCE9E9',padding:12,borderRadius:10},photoOverlay:{position:'absolute',top:0,right:0,bottom:0,left:0,backgroundColor:'#F8FAF8',padding:16,zIndex:10,gap:12},photoPreview:{flex:1,width:'100%',backgroundColor:'#E1E9E3'}});
