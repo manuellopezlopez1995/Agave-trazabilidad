@@ -1,11 +1,11 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as Crypto from 'expo-crypto';
 import * as Location from 'expo-location';
-import {Platform} from 'react-native';
+import {Alert,Platform} from 'react-native';
 import {supabase} from './backend';
 
 type Kind='harvest'|'delivery'|'weighing';
-type EvidenceResult={bucket:string;path:string;mimeType:string;size:number;latitude?:number;longitude?:number;capturedAt:string};
+type EvidenceResult={bucket:string;path:string;mimeType:string;size:number;latitude?:number;longitude?:number;capturedAt:string;legibilityConfirmed:boolean};
 const buckets:Record<Kind,string>={harvest:'harvest-evidence',delivery:'delivery-evidence',weighing:'weighing-tickets'};
 const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -42,6 +42,11 @@ export async function captureEvidence(kind:Kind,organizationId:string,entityId:s
  const picture=await ImagePicker.launchCameraAsync({quality:.75,base64:true,exif:false,allowsEditing:false});
  if(picture.canceled)return null;
  const asset=picture.assets[0];if(!asset?.base64)throw Error('La cámara no devolvió la imagen');
+ if(kind!=='harvest'){
+  const question=kind==='weighing'?'¿Se leen claramente el folio y los pesos del ticket?':'¿Se leen claramente el receptor, la fecha y los pesos del recibo?';
+  const approved=Platform.OS==='web'?window.confirm(question):await new Promise<boolean>(resolve=>Alert.alert('Verifica la fotografía',question,[{text:'Repetir foto',onPress:()=>resolve(false)},{text:'Sí, es legible',onPress:()=>resolve(true)}],{cancelable:false}));
+  if(!approved)return null;
+ }
  const bytes=decodeBase64(asset.base64);
  if(bytes.byteLength===0||bytes.byteLength>maxEvidenceBytes)throw Error('La fotografía debe pesar menos de 12 MB');
  const mimeType=asset.mimeType==='image/png'?'image/png':'image/jpeg';
@@ -56,5 +61,5 @@ export async function captureEvidence(kind:Kind,organizationId:string,entityId:s
  if(locationPermission.granted){
   try{const p=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced});latitude=p.coords.latitude;longitude=p.coords.longitude}catch{/* La foto sigue válida sin GPS. */}
  }
- return {bucket,path,mimeType,size:bytes.byteLength,latitude,longitude,capturedAt:new Date().toISOString()};
+ return {bucket,path,mimeType,size:bytes.byteLength,latitude,longitude,capturedAt:new Date().toISOString(),legibilityConfirmed:kind!=='harvest'};
 }

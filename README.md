@@ -26,7 +26,7 @@ Las seis políticas de `supabase/migrations/20260923_private_evidence_policies.s
 
 1. ADMIN: inicia sesión y consulta predio `PREDIO-TEST-001`, cuadrilla `CUADRILLA-TEST-001`, jima `AGV-2026-000001`, viaje `AGV-2026-000003` y entrega `AGV-2026-000004`.
 2. CREW_LEADER: abre la jima asignada, inicia jima, captura la foto en el campo y registra agaves, °Brix y peso reales en el lote `AGV-2026-000002` antes de terminar la jima. Ese lote ya está vinculado al viaje y tiene sus mediciones pendientes. La app exige mediciones y foto antes de terminar.
-3. DRIVER: abre el viaje asignado, inicia carga, registra bruto y tara de origen (con foto del ticket si existe), sale a ruta y registra llegada. En destino registra bruto y tara de destino, fotografía el recibo, identifica quién recibió y anota pesos aceptado/rechazado y motivo si corresponde. Cierra la entrega. Las fotos opcionalmente incluyen GPS si el dispositivo ya tiene permiso.
+3. DRIVER: abre el viaje asignado, inicia carga, registra bruto y tara de origen con folio y foto legible del ticket, sale a ruta y registra llegada. En destino registra bruto y tara con otro ticket, fotografía el recibo legible, identifica quién recibió y anota pesos aceptado/rechazado y motivo si corresponde. Cierra la entrega. Las fotos opcionalmente incluyen GPS si el dispositivo ya tiene permiso.
 4. ADMIN: vuelve a cargar datos y confirma evidencia, pesajes y estados desde la app y desde Supabase. Repite con las tres cuentas para comprobar la visibilidad RLS. El chofer no debe ver jimas ajenas; el jefe ve su jima y el viaje de su lote.
 
 El recorrido físico de prueba se completó en iPad: jima `AGV-2026-000001` cosechada, lote `AGV-2026-000002` con 10 agaves/25 °Brix/500 kg, viaje `AGV-2026-000003` con pesajes de origen y destino y entrega `AGV-2026-000004` cerrada con 490 kg aceptados. Las fotografías de jima, tickets y recibo quedaron en buckets privados.
@@ -43,6 +43,15 @@ El recorrido físico de prueba se completó en iPad: jima `AGV-2026-000001` cose
 - Evidencias limitadas a JPEG/PNG y 12 MB.
 
 La prueba `supabase/tests/20260924_negative_rls_storage.sql` se ejecutó contra ADMIN, CREW_LEADER y DRIVER dentro de una transacción revertida. Confirmó que los tres no pueden leer, insertar ni actualizar registros de otra organización, no pueden actualizar estados directamente y no pueden leer ni escribir fotografías/tickets ajenos. La comprobación posterior confirmó cero organizaciones y predios temporales.
+
+## Control de compradores, conciliación y evidencia
+
+`supabase/migrations/20260924_operations_control.sql` se aplicó al proyecto real el 24 de septiembre de 2026. Antes de desplegar en otro proyecto, ejecuta esa migración y después `supabase/tests/20260924_operations_control_negative.sql` en el editor SQL. La prueba termina en `ROLLBACK`; verifica denegación de escritura fuera de organización, cambios de pesajes originales, inserción directa de correcciones y fotografías nuevas sin confirmación de legibilidad.
+
+- Una jima puede abastecer varios compradores mediante viajes diferentes. Cada viaje admite un solo comprador. Administración descarga un expediente HTML por comprador desde la jima; reúne los lotes cargados en esos viajes, pesajes, tickets, recibos, fotos de jima y aclaraciones. El archivo dice **BORRADOR** mientras falten documentos o estados. No equivale a una aceptación oficial del comprador. Revísalo antes de compartirlo: contiene evidencia privada incrustada.
+- La conciliación compara peso de campo, neto en origen, neto en destino y peso aceptado más rechazado. El administrador configura una tolerancia por organización, de entrada 10 kg o 2 % del peso de origen, la mayor. Si la diferencia la supera, el chofer o administrador registra explicación antes del cierre. El servidor impide cerrar si falta.
+- Tickets y recibos nuevos requieren fotografía y confirmación humana de legibilidad. Se guarda quién adjuntó la imagen, fecha de captura y GPS si el dispositivo lo permite. Las correcciones administrativas se agregan como notas fechadas sin modificar los pesajes ni eliminar fotos. Las fotos anteriores a esta migración no quedan certificadas automáticamente como legibles: los expedientes históricos se marcan borrador para su revisión.
+- El tablero de administración muestra viajes activos, entregados hoy en horario de Jalisco y registros con documentos faltantes. La búsqueda por jima, predio, placa, folio o comprador recorre también el historial. Los viajes antiguos sin placa mostrarán “Sin placa”.
 
 ## Verificación de desarrollo
 
