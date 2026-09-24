@@ -3,6 +3,7 @@ import {ActivityIndicator,Alert,Image,Linking,Platform,Pressable,SafeAreaView,Sc
 import {Session} from '@supabase/supabase-js';
 import {supabase} from './backend';
 import {captureEvidence} from './evidence';
+import {buildDossier,DossierImage} from './dossier';
 
 type Role='ADMIN'|'CREW_LEADER'|'DRIVER';
 type Profile={id:string;full_name:string;role:Role;status:string};
@@ -42,7 +43,7 @@ export default function RealApp(){
  const [gross,setGross]=useState(''),[tare,setTare]=useState(''),[ticketNumber,setTicketNumber]=useState('');
  const [receiver,setReceiver]=useState(''),[accepted,setAccepted]=useState(''),[rejected,setRejected]=useState(''),[rejectionReason,setRejectionReason]=useState('');
  const [photoUrl,setPhotoUrl]=useState('');
- const [photoLoading,setPhotoLoading]=useState(false);
+ const [photoLoading,setPhotoLoading]=useState(false),[exporting,setExporting]=useState(false);
  const [team,setTeam]=useState<Profile[]>([]),[teamError,setTeamError]=useState('');
  useEffect(()=>()=>{if(photoUrl.startsWith('blob:'))URL.revokeObjectURL(photoUrl)},[photoUrl]);
  useEffect(()=>{if(!supabase)return;supabase.auth.getSession().then(({data:{session},error})=>{if(error)setError(error.message);setSession(session);setLoading(false)});const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{setSession(next);if(!next){setProfile(null);setOrganizationId('');setFarms([]);setCrews([]);setHarvests([]);setLots([]);setTrips([]);setTripLots([]);setDeliveries([]);setWeighings([]);setHarvestPhotos([]);setDeliveryPhotos([]);setDrivers([]);setTeam([])}});return()=>subscription.unsubscribe()},[]);
@@ -112,6 +113,45 @@ export default function RealApp(){
   }catch(e){const message=`No se pudo abrir la fotografía: ${String(e)}`;setError(message);showError(message)}
   finally{setPhotoLoading(false)}
  };
+ const exportHarvest=async(h:Harvest)=>{
+  if(Platform.OS!=='web'||!supabase||!organizationId||profile?.role!=='ADMIN')return showError('El expediente se descarga desde la PWA con una sesión de administrador.');
+  if(exporting)return;setExporting(true);setError('');
+  try{
+   // Releer al exportar: el expediente no debe basarse en tarjetas que pudieron quedar desactualizadas.
+   const [hr,fr,cr,lr]=await Promise.all([
+    supabase.from('harvest_orders').select('id,trace_code,farm_id,crew_id,status,scheduled_date,started_at,completed_at,notes').eq('id',h.id).eq('organization_id',organizationId).single(),
+    supabase.from('farms').select('id,code,name,municipality,state').eq('id',h.farm_id).eq('organization_id',organizationId).single(),
+    h.crew_id?supabase.from('crews').select('id,name').eq('id',h.crew_id).eq('organization_id',organizationId).single():Promise.resolve({data:null,error:null}),
+    supabase.from('agave_lots').select('id,trace_code,agave_count,average_brix,actual_weight_kg').eq('harvest_order_id',h.id).eq('organization_id',organizationId)
+   ]);for(const r of [hr,fr,cr,lr])check(r.error);if(!hr.data||!fr.data)throw Error('La jima o el predio ya no están disponibles para esta organización.');
+   const lotIds=(lr.data??[]).map(l=>l.id);
+   const linksResult=lotIds.length?await supabase.from('trip_lots').select('trip_id,agave_lot_id').in('agave_lot_id',lotIds):{data:[],error:null};check(linksResult.error);
+   const tripIds=[...new Set((linksResult.data??[]).map(l=>l.trip_id))];
+   const [tr,wr,dr,he]=await Promise.all([
+    tripIds.length?supabase.from('trips').select('id,trace_code,driver_id,status,destination_name,departed_at,arrived_at').in('id',tripIds).eq('organization_id',organizationId):Promise.resolve({data:[],error:null}),
+    tripIds.length?supabase.from('weighings').select('id,trip_id,weighing_type,gross_weight_kg,tare_weight_kg,net_weight_kg,ticket_number,storage_bucket,ticket_storage_path').in('trip_id',tripIds):Promise.resolve({data:[],error:null}),
+    tripIds.length?supabase.from('deliveries').select('id,trace_code,trip_id,status,recipient_company,accepted_weight_kg,rejected_weight_kg,received_by_name,received_at,rejection_reason').in('trip_id',tripIds).eq('organization_id',organizationId):Promise.resolve({data:[],error:null}),
+    supabase.from('harvest_evidence').select('id,storage_bucket,storage_path').eq('harvest_order_id',h.id)
+   ]);for(const r of [tr,wr,dr,he])check(r.error);
+   if((tr.data??[]).length!==tripIds.length)throw Error('No se pudieron leer todos los viajes asociados; no se generará un expediente parcial.');
+   const deliveryIds=(dr.data??[]).map(d=>d.id);
+   const [de,driversResult]=await Promise.all([
+    deliveryIds.length?supabase.from('delivery_evidence').select('id,delivery_id,storage_bucket,storage_path').in('delivery_id',deliveryIds):Promise.resolve({data:[],error:null}),
+    (tr.data??[]).some(t=>t.driver_id)?supabase.from('profiles').select('id,full_name').in('id',(tr.data??[]).map(t=>t.driver_id).filter((v):v is string=>!!v)):Promise.resolve({data:[],error:null})
+   ]);for(const r of [de,driversResult])check(r.error);
+   const refs=[...(he.data??[]).map(p=>({kind:'harvest',label:`Jima ${h.trace_code}`,bucket:p.storage_bucket,path:p.storage_path})),...(wr.data??[]).filter(w=>w.ticket_storage_path).map(w=>({kind:'ticket',label:w.id,bucket:w.storage_bucket||'weighing-tickets',path:w.ticket_storage_path!})),...(de.data??[]).map(p=>({kind:'delivery',label:`Entrega ${(dr.data??[]).find(d=>d.id===p.delivery_id)?.trace_code??p.delivery_id}`,bucket:p.storage_bucket,path:p.storage_path}))];
+   const images:DossierImage[]=[];
+   for(const ref of refs){
+    const {data:blob,error:downloadError}=await supabase.storage.from(ref.bucket).download(ref.path);check(downloadError);if(!blob)throw Error(`No se pudo descargar la evidencia ${ref.label}`);
+    if(!blob.type.startsWith('image/'))throw Error(`La evidencia ${ref.label} no es una imagen compatible.`);
+    const base64=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('No se pudo leer una fotografía'));reader.readAsDataURL(blob)});
+    images.push({kind:ref.kind,label:ref.label,mime:blob.type,base64,fileName:ref.path.split('/').pop()||'evidencia'});
+   }
+   const result=buildDossier({harvest:hr.data,farm:fr.data,crew:cr.data,lots:lr.data??[],trips:tr.data??[],links:linksResult.data??[],weighings:wr.data??[],deliveries:dr.data??[],drivers:driversResult.data??[],images,generatedAt:new Date().toISOString(),organizationId});
+   const file=new Blob([result.html],{type:'text/html;charset=utf-8'}),url=URL.createObjectURL(file),anchor=document.createElement('a');anchor.href=url;anchor.download=`expediente-${h.trace_code.replace(/[^a-zA-Z0-9_-]/g,'_')}-${result.complete?'completo':'borrador'}.html`;document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+   if(!result.complete)showError(`Expediente descargado como BORRADOR. Faltan ${result.gaps.length} elementos; consulta el detalle en el archivo.`);
+  }catch(e){const message=`No se pudo generar el expediente: ${String(e)}`;setError(message);showError(message)}finally{setExporting(false)}
+ };
  const createTrip=()=>action(async()=>{
   if(!supabase||!session||!organizationId)throw Error('Sesión inválida');const lot=lots.find(l=>l.id===tripLotId);
   if(!lot||!tripDriverId)throw Error('Selecciona lote y chofer');const destinationName=requiredText(destination,'Destino',120);
@@ -156,6 +196,7 @@ export default function RealApp(){
    {selected===h.id&&<>
     <Text>Cuadrilla: {crews.find(c=>c.id===h.crew_id)?.name??'Sin asignar'}</Text>
     {h.notes?<Text>{h.notes}</Text>:null}
+    {profile?.role==='ADMIN'&&<Button label={exporting?'Preparando expediente…':'Descargar expediente de trazabilidad'} onPress={()=>void exportHarvest(h)} disabled={exporting||busy}/>}
     {lots.filter(l=>l.harvest_order_id===h.id).map(l=><View key={l.id}><Text>Lote {l.trace_code}: {l.agave_count??'—'} agaves · {l.average_brix??'—'} °Brix · {l.actual_weight_kg??'—'} kg</Text>{h.status==='IN_PROGRESS'&&l.status==='OPEN'&&(profile?.role==='ADMIN'||profile?.role==='CREW_LEADER')&&<Button label={`Guardar mediciones en ${l.trace_code}`} onPress={()=>measureLot(l)} disabled={busy}/>}</View>)}
     <Text>Evidencias: {harvestPhotos.filter(p=>p.harvest_order_id===h.id).length}</Text>
     {harvestPhotos.filter(p=>p.harvest_order_id===h.id).map(p=><Button key={p.id} label="Ver fotografía" onPress={()=>openPhoto(p.storage_bucket,p.storage_path)}/>)}
