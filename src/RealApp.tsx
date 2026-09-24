@@ -1,5 +1,5 @@
 import React,{useCallback,useEffect,useState} from 'react';
-import {ActivityIndicator,Alert,Linking,Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
+import {ActivityIndicator,Alert,Linking,Platform,Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
 import {Session} from '@supabase/supabase-js';
 import {supabase} from './backend';
 import {captureEvidence} from './evidence';
@@ -24,7 +24,8 @@ function requiredText(value:string,label:string,maxLength:number){const clean=va
 function decimal(value:string,label:string,min:number,max:number){const normalized=value.trim().replace(',','.');if(!normalized)throw Error(`${label} es obligatorio`);const parsed=Number(normalized);if(!Number.isFinite(parsed)||parsed<min||parsed>max)throw Error(`${label} debe estar entre ${min} y ${max}`);return parsed}
 function integer(value:string,label:string,min:number,max:number){const parsed=decimal(value,label,min,max);if(!Number.isInteger(parsed))throw Error(`${label} debe ser un número entero`);return parsed}
 function isoDate(value:string){if(!/^\d{4}-\d{2}-\d{2}$/.test(value))throw Error('La fecha debe tener el formato AAAA-MM-DD');const parsed=new Date(`${value}T00:00:00Z`);if(Number.isNaN(parsed.getTime())||parsed.toISOString().slice(0,10)!==value)throw Error('La fecha no es válida');return value}
-function confirm(title:string,message:string,run:()=>void){Alert.alert(title,message,[{text:'Cancelar',style:'cancel'},{text:'Confirmar',style:'default',onPress:run}])}
+function confirm(title:string,message:string,run:()=>void){if(Platform.OS==='web'){if(window.confirm(`${title}\n\n${message}`))run();return}Alert.alert(title,message,[{text:'Cancelar',style:'cancel'},{text:'Confirmar',style:'default',onPress:run}])}
+function showError(message:string){if(Platform.OS==='web')window.alert(message);else Alert.alert('No se pudo completar',message)}
 export default function RealApp(){
  const [session,setSession]=useState<Session|null>(null),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [email,setEmail]=useState(''),[password,setPassword]=useState('');
@@ -55,7 +56,7 @@ export default function RealApp(){
   ]);for(const result of [f,c,h,l,t,tl,d,w,hp,dp,dr])check(result.error);setFarms((f.data??[]) as Farm[]);setCrews((c.data??[]) as Crew[]);setHarvests((h.data??[]) as Harvest[]);setLots((l.data??[]) as Lot[]);setTrips((t.data??[]) as Trip[]);setTripLots((tl.data??[]) as TripLot[]);setDeliveries((d.data??[]) as Delivery[]);setWeighings((w.data??[]) as Weighing[]);setHarvestPhotos((hp.data??[]) as FileRow[]);setDeliveryPhotos((dp.data??[]) as FileRow[]);setDrivers((dr.data??[]) as Profile[]);
  }catch(e){setError(String(e))}},[session]);
  useEffect(()=>{if(session)void load()},[session,load]);
- const action=async(fn:()=>Promise<void>)=>{setBusy(true);setError('');try{await fn();await load()}catch(e){setError(String(e));Alert.alert('No se pudo completar',String(e))}finally{setBusy(false)}};
+ const action=async(fn:()=>Promise<void>)=>{setBusy(true);setError('');try{await fn();await load()}catch(e){setError(String(e));showError(String(e))}finally{setBusy(false)}};
  const login=()=>action(async()=>{if(!supabase)throw Error('Falta configurar Supabase');const normalized=email.trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized))throw Error('Escribe un correo válido');if(!password)throw Error('Escribe tu contraseña');const {error}=await supabase.auth.signInWithPassword({email:normalized,password});check(error);setPassword('')});
  const createFarm=()=>action(async()=>{if(!supabase||!session||!organizationId)throw Error('Sesión inválida');const code=requiredText(farmCode,'Código',40).toUpperCase();if(!/^[A-Z0-9][A-Z0-9_-]*$/.test(code))throw Error('El código sólo puede contener letras, números, guion y guion bajo');const name=requiredText(farmName,'Nombre',120),state=requiredText(farmState,'Estado',80);const {error}=await supabase.from('farms').insert({organization_id:organizationId,code,name,state,country:'México',created_by:session.user.id});check(error);setFarmCode('');setFarmName('')});
  const createHarvest=()=>action(async()=>{if(!supabase||!session||!organizationId)throw Error('Sesión inválida');if(!farmId||!crewId)throw Error('Selecciona predio y cuadrilla');const scheduledDate=isoDate(date);const {error}=await supabase.from('harvest_orders').insert({organization_id:organizationId,farm_id:farmId,crew_id:crewId,scheduled_date:scheduledDate,status:'ASSIGNED',created_by:session.user.id});check(error);setFarmId('');setCrewId('')});

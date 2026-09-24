@@ -1,6 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as Crypto from 'expo-crypto';
 import * as Location from 'expo-location';
+import {Platform} from 'react-native';
 import {supabase} from './backend';
 
 type Kind='harvest'|'delivery'|'weighing';
@@ -32,8 +33,12 @@ function decodeBase64(input:string):ArrayBuffer{
 export async function captureEvidence(kind:Kind,organizationId:string,entityId:string,userId:string):Promise<EvidenceResult|null>{
  if(!supabase)throw Error('Falta configurar Supabase');
  if(!uuidPattern.test(organizationId)||!uuidPattern.test(entityId)||!uuidPattern.test(userId))throw Error('La ruta de evidencia no es válida');
- const permission=await ImagePicker.requestCameraPermissionsAsync();
- if(!permission.granted)throw Error('Activa el permiso de cámara para registrar evidencia');
+ // Web pickers must open synchronously from the user's tap. Browser permissions
+ // are handled by the picker itself; awaiting a permission call blocks it.
+ if(Platform.OS!=='web'){
+  const permission=await ImagePicker.requestCameraPermissionsAsync();
+  if(!permission.granted)throw Error('Activa el permiso de cámara para registrar evidencia');
+ }
  const picture=await ImagePicker.launchCameraAsync({quality:.75,base64:true,exif:false,allowsEditing:false});
  if(picture.canceled)return null;
  const asset=picture.assets[0];if(!asset?.base64)throw Error('La cámara no devolvió la imagen');
@@ -45,7 +50,9 @@ export async function captureEvidence(kind:Kind,organizationId:string,entityId:s
  const {error}=await supabase.storage.from(bucket).upload(path,bytes,{contentType:mimeType,upsert:false});
  if(error)throw error;
  let latitude:number|undefined,longitude:number|undefined;
- const locationPermission=await Location.getForegroundPermissionsAsync();
+ const locationPermission=Platform.OS==='web'
+  ?await Location.requestForegroundPermissionsAsync()
+  :await Location.getForegroundPermissionsAsync();
  if(locationPermission.granted){
   try{const p=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced});latitude=p.coords.latitude;longitude=p.coords.longitude}catch{/* La foto sigue válida sin GPS. */}
  }
