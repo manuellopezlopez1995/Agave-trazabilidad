@@ -1,0 +1,49 @@
+{
+  "expo": {
+    "name": "Agave Trazabilidad",
+    "slug": "agave-trazabilidad",
+    "owner": "manuellopezs-team",
+    "scheme": "agavetrace",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F6F8F4"
+    },
+    "ios": {
+      "bundleIdentifier": "com.agavetrazabilidad.app",
+      "buildNumber": "1",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Registrar coordenadas de jimas y entregas.",
+        "NSCameraUsageDescription": "Fotografiar evidencias de cosecha, pesajes y entrega.",
+        "NSPhotoLibraryUsageDescription": "Seleccionar evidencias de cosecha, pesajes y entrega.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.agavetrazabilidad.app",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "CAMERA"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Seleccionar evidencias de agave.",
+          "cameraPermission": "Tomar fotos de la jima, pesajes y entrega."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "cee60811-0e2f-448f-b9eb-be6291fcc843"
+      }
+    }
+  }
+}
