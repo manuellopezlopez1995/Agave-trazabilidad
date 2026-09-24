@@ -139,6 +139,9 @@ export default function RealApp(){
     deliveryIds.length?supabase.from('delivery_evidence').select('id,delivery_id,storage_bucket,storage_path').in('delivery_id',deliveryIds):Promise.resolve({data:[],error:null}),
     (tr.data??[]).some(t=>t.driver_id)?supabase.from('profiles').select('id,full_name').in('id',(tr.data??[]).map(t=>t.driver_id).filter((v):v is string=>!!v)):Promise.resolve({data:[],error:null})
    ]);for(const r of [de,driversResult])check(r.error);
+   // Un expediente compartido no debe revelar operaciones de otro comprador.
+   const buyerNames=[...new Set((dr.data??[]).map(d=>d.recipient_company?.trim().toLocaleLowerCase('es-MX')).filter(Boolean))];
+   if(buyerNames.length>1)throw Error('Esta jima incluye entregas para más de un comprador. Se necesitan expedientes separados por comprador antes de compartirlos; no se descargó un archivo combinado.');
    const refs=[...(he.data??[]).map(p=>({kind:'harvest',label:`Jima ${h.trace_code}`,bucket:p.storage_bucket,path:p.storage_path})),...(wr.data??[]).filter(w=>w.ticket_storage_path).map(w=>({kind:'ticket',label:w.id,bucket:w.storage_bucket||'weighing-tickets',path:w.ticket_storage_path!})),...(de.data??[]).map(p=>({kind:'delivery',label:`Entrega ${(dr.data??[]).find(d=>d.id===p.delivery_id)?.trace_code??p.delivery_id}`,bucket:p.storage_bucket,path:p.storage_path}))];
    const images:DossierImage[]=[];
    for(const ref of refs){
