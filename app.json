@@ -8,6 +8,12 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "icon": "./assets/icon.png",
+    "web": {
+      "name": "Agave Trazabilidad",
+      "shortName": "Agave Traza",
+      "favicon": "./assets/icon.png",
+      "output": "single"
+    },
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",

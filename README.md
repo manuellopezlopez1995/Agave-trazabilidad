@@ -1,6 +1,16 @@
-# Agave Trazabilidad · Expo
+# Agave Trazabilidad · web/PWA
 
-Aplicación React Native/Expo conectada a `agave-trazabilidad` en Supabase. Utiliza únicamente la clave publicable del proyecto, sesiones de usuario y las políticas RLS. No incluye contraseñas ni claves de servicio.
+Aplicación React Native/Expo conectada a `agave-trazabilidad` en Supabase. Objetivo del piloto: aplicación web servida por HTTPS, abierta desde un navegador y añadida a la pantalla de inicio del iPhone/iPad. Utiliza únicamente la clave publicable del proyecto, sesiones de usuario y las políticas RLS. No incluye contraseñas ni claves de servicio. App Store/TestFlight queda para una fase posterior.
+
+## Publicar la versión web
+
+1. Ejecuta `npm ci` en `agave-app`. Configura `EXPO_PUBLIC_SUPABASE_URL` y `EXPO_PUBLIC_SUPABASE_ANON_KEY` en el entorno de compilación usando los valores públicos de `.env.example`. Nunca configures una clave de servicio en la web.
+2. Ejecuta `npm run typecheck && npm run build:web`. Se crea `dist/` con `index.html`, `manifest.json` y los iconos de la PWA.
+3. Publica **todo** el contenido de `dist/` en la raíz de un hosting estático con HTTPS; sirve `index.html` en `/`, `manifest.json` como JSON y los archivos JS con su tipo MIME correcto. No actives caché permanente del HTML. Esta aplicación requiere conexión a Supabase; no tiene modo de trabajo sin conexión.
+4. En iPhone/iPad abre la URL HTTPS desde Safari o Chrome, usa Compartir → Añadir a pantalla de inicio. En Android abre la URL desde Chrome y usa Instalar aplicación/Añadir a pantalla de inicio.
+5. Comprueba con cuentas de ADMIN, CREW_LEADER y DRIVER el acceso, la toma de fotografías, las coordenadas opcionales y la consulta de fotos privadas. En web, el selector de imágenes lo controla el navegador y debe abrirse desde el toque del usuario. Los permisos de ubicación y cámara requieren HTTPS.
+
+La aplicación sigue usando el backend real y sus controles RLS; instalar un acceso directo no convierte por sí solo la web en una app de App Store. No se necesita la cuota de Apple Developer para distribuir este enlace web.
 
 ## Abrir en un iPad o iPhone
 
