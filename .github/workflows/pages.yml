@@ -1,0 +1,57 @@
+name: Publicar PWA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: cp .env.example .env
+      - run: npm run typecheck && npm run build:web
+      - name: Preparar ruta de GitHub Pages
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('dist')
+          html = root.joinpath('index.html')
+          content = html.read_text()
+          for path in ('manifest.json', 'icon-192.png', 'favicon.ico'):
+              content = content.replace(f'="/{path}"', f'="/Agave-trazabilidad/{path}"')
+          content = content.replace('src="/_expo/', 'src="/Agave-trazabilidad/_expo/')
+          html.write_text(content)
+          manifest = root.joinpath('manifest.json')
+          data = json.loads(manifest.read_text())
+          data.update(id='/Agave-trazabilidad/', start_url='/Agave-trazabilidad/', scope='/Agave-trazabilidad/')
+          for icon in data['icons']:
+              icon['src'] = '/Agave-trazabilidad' + icon['src']
+          manifest.write_text(json.dumps(data, ensure_ascii=False))
+          root.joinpath('.nojekyll').touch()
+          PY
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
