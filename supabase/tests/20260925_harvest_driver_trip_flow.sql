@@ -32,6 +32,15 @@ begin
    raise exception 'El chofer no ve el viaje disponible'; end if;
  if public.claim_harvest_trip(v_trip)<>'ASSIGNED' or public.claim_harvest_trip(v_trip)<>'ASSIGNED' then
    raise exception 'La toma de viaje no es confirmada o idempotente'; end if;
+ if public.can_manage_harvest(v_first) or public.can_access_harvest(v_first) then
+   raise exception 'El chofer recibió permisos de administración sobre la jima'; end if;
+ if not exists(select 1 from public.harvest_orders where id=v_first) then
+   raise exception 'El chofer no puede consultar la jima de su viaje'; end if;
+ begin
+   perform public.advance_harvest(v_first);
+   raise exception 'El chofer modificó la jima';
+ exception when insufficient_privilege then null;
+ end;
  if exists(select 1 from jsonb_array_elements(public.driver_available_trips()) a where a->>'trip_id'=v_trip::text) then
    raise exception 'El viaje tomado sigue disponible'; end if;
  if public.mark_trip_at_field(v_trip,v_event,now(),null,null)<>'AT_FIELD'
@@ -60,4 +69,4 @@ begin
    raise exception 'El administrador no puede reconstruir las tres cadenas'; end if;
 end $$;
 rollback;
-select 'OK: tres jimas/viajes, unicidad, visibilidad DRIVER, toma confirmada, llegada idempotente, bloqueo de salida y trazabilidad ADMIN; datos temporales revertidos' as verification;
+select 'OK: tres jimas/viajes, unicidad, lectura sin escritura DRIVER, toma confirmada, llegada idempotente, bloqueo de salida y trazabilidad ADMIN; datos temporales revertidos' as verification;
