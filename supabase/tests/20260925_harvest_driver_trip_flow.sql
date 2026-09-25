@@ -20,6 +20,13 @@ begin
    raise exception 'No se reservaron tres viajes separados para las tres jimas'; end if;
  v_first:=(v_result->0->>'id')::uuid;
  select id into v_trip from public.trips where harvest_order_id=v_first;
+ begin
+   perform set_config('app.creating_plantation_trip','yes',true);
+   insert into public.trips(organization_id,origin_farm_id,harvest_order_id,status)
+     select h.organization_id,h.farm_id,h.id,'PENDING_DRIVER' from public.harvest_orders h where h.id=v_first;
+   raise exception 'Se permitió duplicar el viaje de una jima';
+ exception when unique_violation then null;
+ end;
  perform set_config('request.jwt.claim.sub',v_driver::text,true);
  if not exists(select 1 from jsonb_array_elements(public.driver_available_trips()) a where a->>'trip_id'=v_trip::text) then
    raise exception 'El chofer no ve el viaje disponible'; end if;
@@ -53,4 +60,4 @@ begin
    raise exception 'El administrador no puede reconstruir las tres cadenas'; end if;
 end $$;
 rollback;
-select 'OK: tres jimas/viajes, visibilidad DRIVER, toma exclusiva, llegada idempotente, bloqueo de salida y trazabilidad ADMIN; datos temporales revertidos' as verification;
+select 'OK: tres jimas/viajes, unicidad, visibilidad DRIVER, toma confirmada, llegada idempotente, bloqueo de salida y trazabilidad ADMIN; datos temporales revertidos' as verification;
