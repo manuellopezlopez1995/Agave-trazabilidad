@@ -69,6 +69,10 @@ export default function RealApp(){
  useEffect(()=>()=>{if(photoUrl.startsWith('blob:'))URL.revokeObjectURL(photoUrl)},[photoUrl]);
  useEffect(()=>()=>{if(preparedPdf)URL.revokeObjectURL(preparedPdf.url)},[preparedPdf]);
  useEffect(()=>{if(!supabase)return;supabase.auth.getSession().then(({data:{session},error})=>{if(error)setError(error.message);setSession(session);setLoading(false)});const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{setSession(next);if(!next){setProfile(null);setOrganizationId('');setFarms([]);setCrews([]);setHarvests([]);setLots([]);setTrips([]);setTripLots([]);setDeliveries([]);setWeighings([]);setHarvestPhotos([]);setDeliveryPhotos([]);setDrivers([]);setTeam([])}});return()=>subscription.unsubscribe()},[]);
+ useEffect(()=>{if(!session||!isOnline||Platform.OS!=='web'||!pendingTripArrivals().some(x=>x.actorId===session.user.id))return;
+  let active=true;void syncTripArrivals(session.user.id).then(count=>{if(active){setPendingTripCount(count);void load()}}).catch(e=>{if(active)setError(`Llegada pendiente de sincronizar: ${String(e)}`)});
+  return()=>{active=false};
+ },[session,isOnline]);
  const load=useCallback(async()=>{if(!supabase||!session)return;setError('');try{
   const {data:p,error:pe}=await supabase.from('profiles').select('id,full_name,role,status').eq('id',session.user.id).single();check(pe);if(!p||p.status!=='ACTIVE')throw Error('Tu perfil no está activo.');setProfile(p as Profile);
   const {data:membership,error:me}=await supabase.from('organization_members').select('organization_id').eq('profile_id',session.user.id).eq('active',true).single();check(me);if(!membership)throw Error('No tienes una organización activa.');const org=membership.organization_id;setOrganizationId(org);
