@@ -6,7 +6,7 @@ Aplicación React Native/Expo conectada a `agave-trazabilidad` en Supabase. Obje
 
 1. Ejecuta `npm ci` en `agave-app`. Configura `EXPO_PUBLIC_SUPABASE_URL` y `EXPO_PUBLIC_SUPABASE_ANON_KEY` en el entorno de compilación usando los valores públicos de `.env.example`. Nunca configures una clave de servicio en la web.
 2. Ejecuta `npm run typecheck && npm run build:web`. Se crea `dist/` con `index.html`, `manifest.json` y los iconos de la PWA.
-3. Publica **todo** el contenido de `dist/` en la raíz de un hosting estático con HTTPS; sirve `index.html` en `/`, `manifest.json` como JSON y los archivos JS con su tipo MIME correcto. No actives caché permanente del HTML. Esta aplicación requiere conexión a Supabase; no tiene modo de trabajo sin conexión.
+3. Publica **todo** el contenido de `dist/` en la raíz de un hosting estático con HTTPS; sirve `index.html` en `/`, `manifest.json` como JSON y los archivos JS con su tipo MIME correcto. No actives caché permanente del HTML. Los datos y cambios de estado requieren conexión a Supabase; la interfaz y la cola local de fotos tienen soporte limitado sin conexión, descrito más abajo.
 4. En iPhone/iPad abre la URL HTTPS desde Safari o Chrome, usa Compartir → Añadir a pantalla de inicio. En Android abre la URL desde Chrome y usa Instalar aplicación/Añadir a pantalla de inicio.
 5. Comprueba con cuentas de ADMIN, CREW_LEADER y DRIVER el acceso, la toma de fotografías, las coordenadas opcionales y la consulta de fotos privadas. En web, el selector de imágenes lo controla el navegador y debe abrirse desde el toque del usuario. Los permisos de ubicación y cámara requieren HTTPS.
 
@@ -56,3 +56,23 @@ La prueba `supabase/tests/20260924_negative_rls_storage.sql` se ejecutó contra 
 ## Verificación de desarrollo
 
 `npm run typecheck` comprueba TypeScript y `npx expo export --platform ios` genera un bundle iOS. Para distribución se requieren los servicios de firma de Expo y Apple; el QR de Expo Go permite probar el proyecto durante el desarrollo. El entorno remoto de desarrollo no tiene acceso a la cámara ni a la sesión física de tu iPad.
+
+## Cierre formal y expediente final (25 de septiembre de 2026)
+
+La migración `supabase/migrations/20260925_formal_close.sql` se ejecutó en el proyecto real y `supabase/tests/20260925_formal_close_negative.sql` pasó en una transacción revertida. El servidor calcula faltantes y sólo un ADMIN puede aprobar un viaje entregado con lotes, origen/destino, tickets, entregas, recibos y explicación de diferencias. El cierre guarda usuario y fecha. Los datos originales del camión aprobado quedan bloqueados para UPDATE/DELETE; los ajustes se registran como notas nuevas.
+
+Cuando todos los viajes de un comprador de la jima están conciliados, administración puede **emitir una versión final**. Supabase conserva una instantánea JSON inmutable, número de versión por jima/comprador, fecha de corte, emisor y SHA-256. Al descargar, la app comprueba la huella en el servidor y reconstruye el HTML desde esa instantánea y las fotografías privadas. Un ajuste posterior aparece por separado en la ficha de la versión; emite una versión nueva para incorporar ajustes al expediente entregable. Conservar una copia del archivo enviado y anotar a quién y cuándo se envió sigue siendo responsabilidad de la operación.
+
+## Señal débil
+
+La PWA guarda su interfaz pública en caché para que pueda abrirse sin red después de la primera instalación. En **web**, fotos nuevas de jima, recibo y tickets tomados sin conexión se guardan provisionalmente en IndexedDB del mismo dispositivo y usuario. El contador superior indica las capturas pendientes; usa **Sincronizar fotografías y tickets pendientes** con conexión antes de avanzar o cerrar. Las rutas estables evitan duplicarlas tras una respuesta perdida. La cola no equivale a un respaldo: Safari puede retirar almacenamiento local, y salir de sesión, borrar datos del navegador o cambiar de dispositivo puede dejar esas fotos inaccesibles. Los demás datos y cambios de estado siguen requiriendo red. La captura sin red debe comprobarse con la cámara física de cada modelo de iPhone/iPad del piloto antes de depender de ella en campo.
+
+## Respaldo y restauración
+
+`scripts/backup.mjs` crea un dump PostgreSQL y descarga los tres buckets privados, calculando SHA-256 y tamaño de cada fotografía en `manifest.json`. Ejecútalo en una máquina segura con `pg_dump` disponible y `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` como variables de entorno privadas. Ejemplo: `node scripts/backup.mjs /ruta-segura/respaldo-AAAA-MM-DD`. Nunca subas el directorio de respaldo, el manifiesto, la conexión ni la clave de servicio a GitHub o a la PWA.
+
+`scripts/restore-test.mjs /ruta-segura/respaldo-AAAA-MM-DD` verifica las huellas, restaura el dump en una **base PostgreSQL aislada** mediante `TEST_DATABASE_URL` y restaura/descarga cada imagen en **otro proyecto Supabase** con `TEST_SUPABASE_URL`, `TEST_SUPABASE_SERVICE_ROLE_KEY` y `TEST_RESTORE_ACK=RESTORE-TO-TEST-ONLY`. Requiere un destino vacío y distinto del origen; el script rechaza las referencias reconocibles del proyecto de producción. Después comprueba consultas en la base de prueba y abre varias imágenes en el proyecto de prueba. Una ejecución real de restauración aún requiere configurar estos destinos privados: una compilación web no demuestra recuperación.
+
+## Recorrido de aceptación de los 17 usuarios
+
+Da de alta 2 ADMIN, 5 CREW_LEADER y 10 DRIVER con cuentas individuales. Para cada rol comprueba inicio/cierre de sesión y que sólo aparecen jimas o viajes asignados. Con un lote de prueba propio de la organización, recorre jima → medición/foto → lote → asignación de camión y placa → pesaje/foto en origen → ruta → pesaje/foto en destino → recibo → aceptación/rechazo → conciliación de ADMIN → versión final por comprador. Repite con dos compradores en la misma jima y comprueba dos versiones separadas. Ensaya un ticket ilegible, diferencia por encima de tolerancia sin explicación, segundo intento de aprobación y usuario de otra organización: todos deben fallar. Realiza las pruebas de cámara y cola sin red en iPhone e iPad y confirma que el contador vuelve a cero. Documenta fecha, dispositivo, cuenta (sin contraseña), resultado y evidencia de cada recorrido antes de dar por aceptados los 17 puestos.
