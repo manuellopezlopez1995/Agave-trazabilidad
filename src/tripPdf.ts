@@ -1,43 +1,31 @@
-/** PDF descargable sin servicios externos: texto y fotografías privadas descargadas con la sesión actual. */
+/** Expediente PDF A4 generado en el dispositivo, con fotografías privadas incrustadas. */
 export type PdfPhoto={label:string;blob:Blob};
 const encoder=new TextEncoder();
-const clean=(value:string)=>value.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,'?');
-const escapePdf=(value:string)=>clean(value).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
-const bytes=(value:string)=>encoder.encode(value);
+const clean=(v:string)=>v.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,'?');
+const escapePdf=(v:string)=>clean(v).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
+const bytes=(v:string)=>encoder.encode(v);
 const join=(chunks:Uint8Array[])=>{const out=new Uint8Array(chunks.reduce((n,c)=>n+c.length,0));let offset=0;for(const c of chunks){out.set(c,offset);offset+=c.length}return out};
-const photoJpeg=async(blob:Blob)=>{
- const url=URL.createObjectURL(blob);
- try{
-  const img=new window.Image();img.src=url;await new Promise<void>((resolve,reject)=>{img.onload=()=>resolve();img.onerror=()=>reject(Error('No se pudo convertir una fotografía a PDF'))});
-  const scale=Math.min(1,1400/Math.max(img.naturalWidth,img.naturalHeight));
-  const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));
-  const ctx=canvas.getContext('2d');if(!ctx)throw Error('No se pudo preparar la fotografía');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0,canvas.width,canvas.height);
-  const data=canvas.toDataURL('image/jpeg',.83).split(',')[1];const raw=atob(data);const result=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)result[i]=raw.charCodeAt(i);
-  return {data:result,width:canvas.width,height:canvas.height};
- }finally{URL.revokeObjectURL(url)}
-};
-/** Mantiene los datos en páginas A4 y añade una página por evidencia. */
+const wrap=(v:string,limit:number)=>{const result:string[]=[];let line='';for(let word of clean(v).split(/\s+/)){while(word.length>limit){if(line){result.push(line);line=''}result.push(word.slice(0,limit));word=word.slice(limit)}if(!word)continue;if(line&&line.length+word.length+1>limit){result.push(line);line=word}else line+=`${line?' ':''}${word}`}if(line)result.push(line);return result.length?result:['']};
+const photoJpeg=async(blob:Blob)=>{const url=URL.createObjectURL(blob);try{const img=new window.Image();img.src=url;await new Promise<void>((resolve,reject)=>{img.onload=()=>resolve();img.onerror=()=>reject(Error('No se pudo convertir una fotografia a PDF'))});const scale=Math.min(1,1400/Math.max(img.naturalWidth,img.naturalHeight));const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));const ctx=canvas.getContext('2d');if(!ctx)throw Error('No se pudo preparar la fotografia');ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0,canvas.width,canvas.height);const raw=atob(canvas.toDataURL('image/jpeg',.83).split(',')[1]);const result=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)result[i]=raw.charCodeAt(i);return {data:result,width:canvas.width,height:canvas.height}}finally{URL.revokeObjectURL(url)}};
+// Paleta y jerarquía del expediente HTML: fondo crema, cabecera verde, separadores dorados y tablas.
+const green='0.094 0.271 0.208',ink='0.098 0.231 0.188',muted='0.263 0.357 0.310',cream='0.969 0.957 0.922',paper='1 0.992 0.969',gold='0.824 0.741 0.596',lineColor='0.867 0.867 0.867';
+const rect=(x:number,y:number,w:number,h:number,color:string)=>`${color} rg ${x} ${y} ${w} ${h} re f\n`;
+const rule=(x:number,y:number,w:number,color=gold)=>`${color} RG 1.2 w ${x} ${y} m ${x+w} ${y} l S\n`;
+const text=(v:string,x:number,y:number,size:number,color=ink,bold=false)=>`${color} rg BT /${bold?'F2':'F1'} ${size} Tf 1 0 0 1 ${x} ${y} Tm (${escapePdf(v)}) Tj ET\n`;
+const base=(page:number,folio:string,first:boolean)=>{let s=rect(0,0,595,842,cream)+rect(28,25,539,792,paper);if(first){s+=rect(28,692,539,125,green)+text('AGAVE / TRAZA  |  EXPEDIENTE DE TRAZABILIDAD',48,786,10,'1 1 1',true)+text(`VIAJE ${clean(folio).slice(0,28)}`,48,745,23,'1 1 1',true)+text('Archivo de trazabilidad por camion',48,714,11,'1 1 1')}else{s+=rect(28,759,539,58,green)+text('AGAVE / TRAZA  |  EXPEDIENTE DE TRAZABILIDAD',46,792,10,'1 1 1',true)+text(`Viaje ${clean(folio).slice(0,42)}`,46,773,11,'1 1 1')}return s+rule(46,52,503,lineColor)+text('Documento de control interno | Verificar antes de compartir',46,38,8,muted)+text(`Pagina ${page}`,508,38,8,muted)};
 export async function makeTripPdf(lines:string[],photos:PdfPhoto[]):Promise<Blob>{
  const objects:Uint8Array[]=[];const add=(content:Uint8Array|string)=>{objects.push(typeof content==='string'?bytes(content):content);return objects.length};
- const catalog=add(''),pagesRoot=add(''),font=add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>');
- const pages:number[]=[];const pageLines:string[]=[];
- for(const line of lines){let text=clean(line);if(!text){pageLines.push('');continue}while(text.length>75){let cut=text.lastIndexOf(' ',75);if(cut<25)cut=75;pageLines.push(text.slice(0,cut));text=text.slice(cut).trimStart()}pageLines.push(text)}
- for(let start=0;start<pageLines.length;start+=49){const part=pageLines.slice(start,start+49);const stream=`BT /F1 11 Tf 46 790 Td 15 TL ${part.map((line,i)=>`${i?'T* ':''}(${escapePdf(line)}) Tj`).join('\n')} ET`;
-  const streamBytes=bytes(stream),content=add(join([bytes(`<< /Length ${streamBytes.length} >>\nstream\n`),streamBytes,bytes('\nendstream')]));
-  pages.push(add(`<< /Type /Page /Parent ${pagesRoot} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${content} 0 R >>`));
- }
- for(const photo of photos){const jpeg=await photoJpeg(photo.blob);
-  const image=add(join([bytes(`<< /Type /XObject /Subtype /Image /Width ${jpeg.width} /Height ${jpeg.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.data.length} >>\nstream\n`),jpeg.data,bytes('\nendstream')]));
-  const ratio=Math.min(500/jpeg.width,690/jpeg.height),w=jpeg.width*ratio,h=jpeg.height*ratio;
-  const caption=clean(photo.label).match(/.{1,75}(?:\s|$)|.{1,75}/g)??[clean(photo.label)];
-  const stream=`BT /F1 10 Tf 46 790 Td 13 TL ${caption.map((line,i)=>`${i?'T* ':''}(${escapePdf(line.trim())}) Tj`).join('\n')} ET\nq ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${((595-w)/2).toFixed(2)} ${(730-h).toFixed(2)} cm /Photo Do Q`;
-  const contentBytes=bytes(stream),content=add(join([bytes(`<< /Length ${contentBytes.length} >>\nstream\n`),contentBytes,bytes('\nendstream')]));
-  pages.push(add(`<< /Type /Page /Parent ${pagesRoot} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${font} 0 R >> /XObject << /Photo ${image} 0 R >> >> /Contents ${content} 0 R >>`));
- }
- objects[catalog-1]=bytes(`<< /Type /Catalog /Pages ${pagesRoot} 0 R >>`);
- objects[pagesRoot-1]=bytes(`<< /Type /Pages /Kids [${pages.map(id=>`${id} 0 R`).join(' ')}] /Count ${pages.length} >>`);
- const chunks=[bytes('%PDF-1.4\n%\xD0\xD4\xC5\xD8\n')],offsets=[0];let total=chunks[0].length;
- objects.forEach((obj,i)=>{offsets.push(total);const section=join([bytes(`${i+1} 0 obj\n`),obj,bytes('\nendobj\n')]);chunks.push(section);total+=section.length});
- const xref=total;chunks.push(bytes(`xref\n0 ${objects.length+1}\n0000000000 65535 f \n${offsets.slice(1).map(n=>`${String(n).padStart(10,'0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length+1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`));
- return new Blob(chunks as BlobPart[],{type:'application/pdf'});
+ const catalog=add(''),pagesRoot=add(''),font=add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>'),boldFont=add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold >>');
+ const folio=(lines[0]??'').split('FOLIO ')[1]??'Viaje';const pages:{stream:string;image?:number}[]=[];let stream=base(1,folio,true),y=672;
+ const nextPage=()=>{pages.push({stream});stream=base(pages.length+1,folio,false);y=741};const reserve=(height:number)=>{if(y-height<75)nextPage()};
+ const section=(title:string)=>{reserve(54);y-=27;stream+=text(title.charAt(0)+title.slice(1).toLowerCase(),46,y,15,ink,true)+rule(46,y-12,503);y-=27};
+ const row=(label:string,value:string)=>{const lhs=wrap(label,29),rhs=wrap(value,52),height=Math.max(lhs.length,rhs.length)*14+13;reserve(height+3);stream+=rect(46,y-height+5,503,height,'0.993 0.989 0.969');lhs.forEach((part,i)=>{stream+=text(part,55,y-11-i*14,9,muted,true)});rhs.forEach((part,i)=>{stream+=text(part,246,y-11-i*14,9,ink)});stream+=rule(46,y-height+4,503,lineColor);y-=height};
+ const note=(value:string)=>{const parts=wrap(value,89),height=parts.length*13+16;reserve(height+6);stream+=rect(46,y-height,503,height,'0.929 0.945 0.906');parts.forEach((part,i)=>{stream+=text(part,57,y-17-i*13,9,muted)});y-=height+10};
+ const status=lines.find(item=>item.startsWith('Estado documental:'))?.split(': ').slice(1).join(': ')??'BORRADOR';const generated=lines.find(item=>item.startsWith('Generado:'))??'';
+ stream+=rect(46,607,503,62,status==='CONCILIADO'?'0.875 0.945 0.875':'1 0.941 0.843')+text(status,59,641,12,ink,true)+text(generated,59,619,9,muted);y=593;
+ for(const raw of lines.slice(4)){const value=raw.trim();if(!value)continue;if(value===value.toUpperCase()&&!value.includes(':')&&value.length<55){section(value);continue}if(value.startsWith('Nota:')||value.startsWith('Las siguientes paginas')){note(value);continue}const split=value.indexOf(': ');if(split>=0)row(value.slice(0,split),value.slice(split+2));else row('Detalle',value)}pages.push({stream});
+ for(const photo of photos){const jpeg=await photoJpeg(photo.blob);const image=add(join([bytes(`<< /Type /XObject /Subtype /Image /Width ${jpeg.width} /Height ${jpeg.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.data.length} >>\nstream\n`),jpeg.data,bytes('\nendstream')]));const caption=wrap(photo.label,83),captionHeight=caption.length*14+24,ratio=Math.min(475/jpeg.width,(588-captionHeight)/jpeg.height),w=jpeg.width*ratio,h=jpeg.height*ratio,left=(595-w)/2,bottom=171+Math.max(0,(535-captionHeight-h)/2);let picture=base(pages.length+1,folio,false);picture+=text('Evidencia fotografica',46,727,17,ink,true)+rule(46,714,503)+rect(45,bottom-9,505,h+18,'0.929 0.945 0.906')+`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${left.toFixed(2)} ${bottom.toFixed(2)} cm /Photo Do Q\n`;caption.forEach((part,i)=>{picture+=text(part,52,132-i*14,9,muted)});pages.push({stream:picture,image})}
+ const pageIds:number[]=[];for(const page of pages){const data=bytes(page.stream),content=add(join([bytes(`<< /Length ${data.length} >>\nstream\n`),data,bytes('\nendstream')]));pageIds.push(add(`<< /Type /Page /Parent ${pagesRoot} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${font} 0 R /F2 ${boldFont} 0 R >>${page.image?` /XObject << /Photo ${page.image} 0 R >>`:''} >> /Contents ${content} 0 R >>`))}
+ objects[catalog-1]=bytes(`<< /Type /Catalog /Pages ${pagesRoot} 0 R >>`);objects[pagesRoot-1]=bytes(`<< /Type /Pages /Kids [${pageIds.map(id=>`${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`);
+ const chunks=[bytes('%PDF-1.4\n%\xD0\xD4\xC5\xD8\n')],offsets=[0];let total=chunks[0].length;objects.forEach((obj,i)=>{offsets.push(total);const part=join([bytes(`${i+1} 0 obj\n`),obj,bytes('\nendobj\n')]);chunks.push(part);total+=part.length});const xref=total;chunks.push(bytes(`xref\n0 ${objects.length+1}\n0000000000 65535 f \n${offsets.slice(1).map(n=>`${String(n).padStart(10,'0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length+1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`));return new Blob(chunks as BlobPart[],{type:'application/pdf'});
 }
