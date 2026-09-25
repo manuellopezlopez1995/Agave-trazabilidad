@@ -19,6 +19,8 @@ const request=async(path,options={})=>{
  return response;
 };
 const files=[];
+const buckets=await (await request('/bucket')).json();
+if(!Array.isArray(buckets)||buckets.some(bucket=>!bucket.id||typeof bucket.id!=='string'))throw Error('No se pudo enumerar de forma completa los buckets de Storage');
 async function list(bucket,prefix=''){
  for(let offset=0;;offset+=100){
   const response=await request(`/object/list/${bucket}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prefix,limit:100,offset,sortBy:{column:'name',order:'asc'}})});
@@ -35,8 +37,8 @@ async function list(bucket,prefix=''){
   if(rows.length<100)break;
  }
 }
-for(const bucket of ['harvest-evidence','weighing-tickets','delivery-evidence'])await list(bucket);
+for(const bucket of buckets)await list(bucket.id);
 const dumpBytes=await readFile(join(target,'database.dump'));
-const manifest={createdAt:new Date().toISOString(),projectUrl:base,database:{file:'database.dump',size:dumpBytes.length,sha256:createHash('sha256').update(dumpBytes).digest('hex')},objects:files};
+const manifest={createdAt:new Date().toISOString(),projectUrl:base,database:{file:'database.dump',size:dumpBytes.length,sha256:createHash('sha256').update(dumpBytes).digest('hex')},buckets:buckets.map(({id,name,public:publicAccess,file_size_limit,allowed_mime_types})=>({id,name,public:publicAccess,file_size_limit,allowed_mime_types})),objects:files};
 await writeFile(join(target,'manifest.json'),JSON.stringify(manifest,null,2),{flag:'wx',mode:0o600});
 console.log(`Respaldo completo: ${files.length} archivos; manifiesto ${join(target,'manifest.json')}`);
