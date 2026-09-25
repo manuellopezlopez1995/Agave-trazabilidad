@@ -19,9 +19,9 @@ const photoJpeg=async(blob:Blob)=>{
 /** Mantiene los datos en páginas A4 y añade una página por evidencia. */
 export async function makeTripPdf(lines:string[],photos:PdfPhoto[]):Promise<Blob>{
  const objects:Uint8Array[]=[];const add=(content:Uint8Array|string)=>{objects.push(typeof content==='string'?bytes(content):content);return objects.length};
- const catalog=add(''),pagesRoot=add(''),font=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+ const catalog=add(''),pagesRoot=add(''),font=add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>');
  const pages:number[]=[];const pageLines:string[]=[];
- for(const line of lines){let text=clean(line);if(!text){pageLines.push('');continue}while(text.length>92){let cut=text.lastIndexOf(' ',92);if(cut<25)cut=92;pageLines.push(text.slice(0,cut));text=text.slice(cut).trimStart()}pageLines.push(text)}
+ for(const line of lines){let text=clean(line);if(!text){pageLines.push('');continue}while(text.length>75){let cut=text.lastIndexOf(' ',75);if(cut<25)cut=75;pageLines.push(text.slice(0,cut));text=text.slice(cut).trimStart()}pageLines.push(text)}
  for(let start=0;start<pageLines.length;start+=49){const part=pageLines.slice(start,start+49);const stream=`BT /F1 11 Tf 46 790 Td 15 TL ${part.map((line,i)=>`${i?'T* ':''}(${escapePdf(line)}) Tj`).join('\n')} ET`;
   const streamBytes=bytes(stream),content=add(join([bytes(`<< /Length ${streamBytes.length} >>\nstream\n`),streamBytes,bytes('\nendstream')]));
   pages.push(add(`<< /Type /Page /Parent ${pagesRoot} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${content} 0 R >>`));
@@ -29,7 +29,8 @@ export async function makeTripPdf(lines:string[],photos:PdfPhoto[]):Promise<Blob
  for(const photo of photos){const jpeg=await photoJpeg(photo.blob);
   const image=add(join([bytes(`<< /Type /XObject /Subtype /Image /Width ${jpeg.width} /Height ${jpeg.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.data.length} >>\nstream\n`),jpeg.data,bytes('\nendstream')]));
   const ratio=Math.min(500/jpeg.width,690/jpeg.height),w=jpeg.width*ratio,h=jpeg.height*ratio;
-  const stream=`BT /F1 12 Tf 46 790 Td (${escapePdf(photo.label)}) Tj ET\nq ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${((595-w)/2).toFixed(2)} ${(750-h).toFixed(2)} cm /Photo Do Q`;
+  const caption=clean(photo.label).match(/.{1,75}(?:\s|$)|.{1,75}/g)??[clean(photo.label)];
+  const stream=`BT /F1 10 Tf 46 790 Td 13 TL ${caption.map((line,i)=>`${i?'T* ':''}(${escapePdf(line.trim())}) Tj`).join('\n')} ET\nq ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${((595-w)/2).toFixed(2)} ${(730-h).toFixed(2)} cm /Photo Do Q`;
   const contentBytes=bytes(stream),content=add(join([bytes(`<< /Length ${contentBytes.length} >>\nstream\n`),contentBytes,bytes('\nendstream')]));
   pages.push(add(`<< /Type /Page /Parent ${pagesRoot} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${font} 0 R >> /XObject << /Photo ${image} 0 R >> >> /Contents ${content} 0 R >>`));
  }

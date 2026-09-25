@@ -6,6 +6,7 @@ import {captureEvidence} from './evidence';
 import {buildDossier,DossierImage} from './dossier';
 import {renderIssuedDossier} from './finalDossier';
 import {makeTripPdf,PdfPhoto} from './tripPdf';
+import {buildTripReportLines} from './tripReport';
 import {pendingEvidence,syncEvidence} from './offlineEvidence';
 import {partitionByBuyer,variance,DEFAULT_VARIANCE_KG,DEFAULT_VARIANCE_PERCENT} from './operations';
 
@@ -149,7 +150,7 @@ export default function RealApp(){
    const linksResult=lotIds.length?await supabase.from('trip_lots').select('trip_id,agave_lot_id,loaded_weight_kg').in('agave_lot_id',lotIds):{data:[],error:null};check(linksResult.error);
    const tripIds=[...new Set((linksResult.data??[]).map(l=>l.trip_id))];
    const [tr,wr,dr,he]=await Promise.all([
-    tripIds.length?supabase.from('trips').select('id,trace_code,driver_id,status,destination_name,departed_at,arrived_at,vehicle_plate').in('id',tripIds).eq('organization_id',organizationId):Promise.resolve({data:[],error:null}),
+    tripIds.length?supabase.from('trips').select('id,trace_code,plantation_folio,driver_id,status,destination_name,departed_at,arrived_at,vehicle_plate').in('id',tripIds).eq('organization_id',organizationId):Promise.resolve({data:[],error:null}),
     tripIds.length?supabase.from('weighings').select('id,trip_id,weighing_type,gross_weight_kg,tare_weight_kg,net_weight_kg,ticket_number,storage_bucket,ticket_storage_path,legibility_confirmed,captured_at,recorded_by,latitude,longitude').in('trip_id',tripIds):Promise.resolve({data:[],error:null}),
     tripIds.length?supabase.from('deliveries').select('id,trace_code,trip_id,status,recipient_company,accepted_weight_kg,rejected_weight_kg,received_by_name,received_at,rejection_reason').in('trip_id',tripIds).eq('organization_id',organizationId):Promise.resolve({data:[],error:null}),
     supabase.from('harvest_evidence').select('id,storage_bucket,storage_path,captured_at,uploaded_by,latitude,longitude').eq('harvest_order_id',h.id)
@@ -181,22 +182,25 @@ export default function RealApp(){
  const downloadTripPdf=async(t:Trip)=>{
   setExporting(true);setError('');try{
    if(!supabase||Platform.OS!=='web'||!t.plantation_folio)throw Error('El viaje requiere folio de plantación para generar su PDF');
-   const farm=farms.find(f=>f.id===t.origin_farm_id),links=tripLots.filter(l=>l.trip_id===t.id),tripDeliveries=deliveries.filter(d=>d.trip_id===t.id),tripWeighings=weighings.filter(w=>w.trip_id===t.id),closure=closures.find(c=>c.trip_id===t.id);
-   const lines=[`AGAVE / TRAZA  |  FOLIO ${t.plantation_folio}`,'EXPEDIENTE POR VIAJE',`Generado: ${new Date().toLocaleString('es-MX')}`,`Estado: ${closure?'CONCILIADO':'EN PROCESO / BORRADOR'}`,'',`ID de plantacion: ${farm?.plantation_id??'Sin asignar'}`,`Predio: ${farm?.name??'No disponible'}  (${farm?.code??'?'})`,`Codigo interno: ${t.trace_code}`,`Chofer: ${team.find(p=>p.id===t.driver_id)?.full_name??drivers.find(p=>p.id===t.driver_id)?.full_name??t.driver_id??'Pendiente'}`,`Placa: ${t.vehicle_plate??'Pendiente'}`,`Destino / comprador: ${t.destination_name??'Pendiente'}`,`Estado del viaje: ${t.status}`,`Salida: ${t.departed_at??'Pendiente'}`,`Llegada: ${t.arrived_at??'Pendiente'}`,`Entrega: ${t.delivered_at??'Pendiente'}`,'','JIMAS Y LOTES'];
-   for(const link of links){const lot=lots.find(l=>l.id===link.agave_lot_id),h=harvests.find(x=>x.id===lot?.harvest_order_id);lines.push(`Jima ${h?.trace_code??'No disponible'} / Lote ${lot?.trace_code??link.agave_lot_id}`,`Peso campo: ${lot?.actual_weight_kg??'--'} kg; cargado: ${link.loaded_weight_kg??'--'} kg; agaves: ${lot?.agave_count??'--'}; Brix: ${lot?.average_brix??'--'}`)}
-   lines.push('','PESAJES');for(const w of tripWeighings)lines.push(`${w.weighing_type}: bruto ${w.gross_weight_kg} - tara ${w.tare_weight_kg} = neto ${w.net_weight_kg} kg; ticket ${w.ticket_number??'sin folio'}`);
-   lines.push('','RECEPCION');for(const d of tripDeliveries)lines.push(`${d.recipient_company}: ${d.status}; aceptado ${d.accepted_weight_kg??'--'} kg; rechazado ${d.rejected_weight_kg??'--'} kg; recibe ${d.received_by_name??'--'}`);
-   const review=tripReview(t);lines.push('','CONCILIACION',`Campo - origen: ${review.comparison.originDifference??'--'} kg; origen - destino: ${review.comparison.transitDifference??'--'} kg; destino - recibido: ${review.comparison.receiptDifference??'--'} kg`);
-   for(const note of varianceNotes.filter(n=>n.trip_id===t.id))lines.push(`Explicacion (${note.created_at}): ${note.reason}`);
-   for(const note of corrections.filter(n=>n.trip_id===t.id))lines.push(`Correccion (${note.created_at}): ${note.field_name}: ${note.corrected_value}; ${note.reason}`);
-   lines.push(`Pendientes: ${review.missing.length?review.missing.join(', '):'Ninguno'}`);
-   if(closure)lines.push(`Aprobado: ${closure.approved_at}; usuario ${team.find(p=>p.id===closure.approved_by)?.full_name??closure.approved_by}`);
-   const harvestIds=[...new Set(links.map(link=>lots.find(l=>l.id===link.agave_lot_id)?.harvest_order_id).filter((x):x is string=>!!x))],deliveryIds=tripDeliveries.map(d=>d.id);
-   const [hp,dp,ws]=await Promise.all([harvestIds.length?supabase.from('harvest_evidence').select('storage_bucket,storage_path,captured_at,uploaded_by,latitude,longitude').in('harvest_order_id',harvestIds):Promise.resolve({data:[],error:null}),deliveryIds.length?supabase.from('delivery_evidence').select('storage_bucket,storage_path,captured_at,uploaded_by,latitude,longitude').in('delivery_id',deliveryIds):Promise.resolve({data:[],error:null}),supabase.from('weighings').select('ticket_storage_path,storage_bucket,captured_at,recorded_by,latitude,longitude').eq('trip_id',t.id)]);
-   for(const row of [hp,dp,ws])check(row.error);
+   const client=supabase,links=tripLots.filter(l=>l.trip_id===t.id);
+   const tripLotsData=[...new Map(links.map(l=>[l.agave_lot_id,lots.find(x=>x.id===l.agave_lot_id)])).values()].filter((x):x is Lot=>!!x);
+   if(tripLotsData.length!==new Set(links.map(l=>l.agave_lot_id)).size)throw Error('No se pudieron leer todos los lotes del viaje');
+   const harvestIds=[...new Set(tripLotsData.map(l=>l.harvest_order_id))];
+   const [hr,fr,dr,hp,ws]=await Promise.all([
+    harvestIds.length?client.from('harvest_orders').select('id,trace_code,status,scheduled_date,started_at,completed_at,notes,crew_id').in('id',harvestIds):Promise.resolve({data:[],error:null}),
+    t.origin_farm_id?client.from('farms').select('plantation_id,name,code,municipality,state').eq('id',t.origin_farm_id).single():Promise.resolve({data:null,error:null}),
+    client.from('deliveries').select('id,trace_code,status,recipient_company,accepted_weight_kg,rejected_weight_kg,received_by_name,received_at,rejection_reason').eq('trip_id',t.id),
+    harvestIds.length?client.from('harvest_evidence').select('storage_bucket,storage_path,captured_at,uploaded_by,latitude,longitude').in('harvest_order_id',harvestIds):Promise.resolve({data:[],error:null}),
+    client.from('weighings').select('ticket_storage_path,storage_bucket,captured_at,recorded_by,latitude,longitude').eq('trip_id',t.id)
+   ]);for(const row of [hr,fr,dr,hp,ws])check(row.error);
+   if((hr.data??[]).length!==harvestIds.length)throw Error('Faltan datos de una jima vinculada al viaje');
+   const deliveryIds=(dr.data??[]).map(d=>d.id);
+   const dp=deliveryIds.length?await client.from('delivery_evidence').select('storage_bucket,storage_path,captured_at,uploaded_by,latitude,longitude').in('delivery_id',deliveryIds):{data:[],error:null};check(dp.error);
    const refs=[...(hp.data??[]).map(x=>({label:'Fotografia de jima',bucket:x.storage_bucket,path:x.storage_path,at:x.captured_at,by:x.uploaded_by,lat:x.latitude,lng:x.longitude})),...(ws.data??[]).filter(x=>x.ticket_storage_path).map(x=>({label:'Ticket de bascula',bucket:x.storage_bucket||'weighing-tickets',path:x.ticket_storage_path!,at:x.captured_at,by:x.recorded_by,lat:x.latitude,lng:x.longitude})),...(dp.data??[]).map(x=>({label:'Recibo de entrega',bucket:x.storage_bucket,path:x.storage_path,at:x.captured_at,by:x.uploaded_by,lat:x.latitude,lng:x.longitude}))];
-   const photos:PdfPhoto[]=[];for(const ref of refs){const {data,error}=await supabase.storage.from(ref.bucket).download(ref.path);check(error);if(!data)throw Error('No se pudo descargar una fotografía privada');photos.push({label:`${ref.label} | ${ref.at??'sin fecha'} | usuario ${ref.by??'--'} | ${ref.lat??'--'}, ${ref.lng??'--'}`,blob:data})}
-   lines.push('',`Fotografias adjuntas: ${photos.length}`);const pdf=await makeTripPdf(lines,photos),url=URL.createObjectURL(pdf);
+   const photos:PdfPhoto[]=[];for(const ref of refs){const {data,error}=await client.storage.from(ref.bucket).download(ref.path);check(error);if(!data)throw Error('No se pudo descargar una fotografía privada');photos.push({label:`${ref.label} | ${ref.at??'sin fecha'} | usuario ${ref.by??'--'} | ${ref.lat??'--'}, ${ref.lng??'--'}`,blob:data})}
+   const closure=closures.find(c=>c.trip_id===t.id);
+   const lines=buildTripReportLines({folio:t.plantation_folio,internalCode:t.trace_code,status:t.status,buyer:t.destination_name,driver:team.find(p=>p.id===t.driver_id)?.full_name??drivers.find(p=>p.id===t.driver_id)?.full_name??t.driver_id??null,plate:t.vehicle_plate??null,departedAt:t.departed_at,arrivedAt:t.arrived_at,deliveredAt:t.delivered_at??null,farm:fr.data??undefined,crewNames:Object.fromEntries(crews.map(c=>[c.id,c.name])),lots:tripLotsData,harvests:hr.data??[],deliveries:dr.data??[],corrections:corrections.filter(n=>n.trip_id===t.id),approvedAt:closure?.approved_at,approvedBy:team.find(p=>p.id===closure?.approved_by)?.full_name??closure?.approved_by,generatedAt:new Date().toLocaleString('es-MX'),photoCount:photos.length});
+   const pdf=await makeTripPdf(lines,photos),url=URL.createObjectURL(pdf);
    setPreparedPdf({tripId:t.id,url,name:`${t.plantation_folio}.pdf`});
   }catch(e){const message=`No se pudo descargar ${t.plantation_folio}: ${String(e)}`;setError(message);showError(message)}finally{setExporting(false)}
  };
