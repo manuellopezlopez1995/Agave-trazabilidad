@@ -69,6 +69,52 @@ create trigger link_harvested_lot_to_trip after update of status on public.agave
 for each row when (new.status is distinct from old.status)
 execute function public.link_completed_lot_to_harvest_trip();
 
+create or replace function public.check_trip_lot_plantation() returns trigger
+language plpgsql set search_path=public,pg_temp as $$
+begin
+ if not exists(select 1 from public.trips t join public.agave_lots l on l.id=new.agave_lot_id
+   where t.id=new.trip_id and t.origin_farm_id=l.farm_id and t.organization_id=l.organization_id
+     and (t.harvest_order_id is null or t.harvest_order_id=l.harvest_order_id)) then
+  raise exception 'El lote debe pertenecer a la jima y plantación del viaje' using errcode='check_violation';
+ end if;
+ return new;
+end $$;
+
+-- Keep the historical path for old harvests, while refusing a second truck
+-- created through the legacy RPC for a newly reserved harvest.
+create or replace function public.create_plantation_trip(p_lot_id uuid,p_driver_id uuid,p_destination text,p_vehicle_plate text)
+returns uuid language plpgsql security definer set search_path=public,pg_temp as $$
+declare v_lot public.agave_lots%rowtype; v_farm public.farms%rowtype; v_org uuid; v_trip uuid; v_next integer;
+begin
+ select * into v_lot from public.agave_lots where id=p_lot_id for update;
+ if not found or not public.is_admin_of_org(v_lot.organization_id) then
+  raise exception 'Sin permiso para crear el viaje' using errcode='insufficient_privilege'; end if;
+ v_org:=v_lot.organization_id;
+ select * into v_farm from public.farms where id=v_lot.farm_id and organization_id=v_org for update;
+ if not found or v_farm.plantation_id is null then raise exception 'Asigna primero el ID de plantación al predio'; end if;
+ if exists(select 1 from public.trips where harvest_order_id=v_lot.harvest_order_id) then
+  raise exception 'La jima ya tiene un viaje reservado; prepara allí su carga y entrega' using errcode='unique_violation'; end if;
+ if v_lot.status::text<>'HARVESTED' or not exists
+  (select 1 from public.harvest_orders h where h.id=v_lot.harvest_order_id and h.farm_id=v_farm.id and h.status::text='HARVESTED') then
+  raise exception 'La jima y el lote deben estar cosechados'; end if;
+ if exists(select 1 from public.trip_lots where agave_lot_id=p_lot_id) then raise exception 'Este lote ya tiene viaje'; end if;
+ if not exists(select 1 from public.profiles p join public.organization_members m on m.profile_id=p.id
+  where p.id=p_driver_id and p.role::text='DRIVER' and p.status::text='ACTIVE' and m.organization_id=v_org and m.active) then
+  raise exception 'El chofer debe estar activo en esta organización'; end if;
+ if nullif(btrim(p_destination),'') is null or length(btrim(p_destination))>120
+   or nullif(btrim(p_vehicle_plate),'') is null or length(btrim(p_vehicle_plate))>25 then
+  raise exception 'Destino y placa son obligatorios y deben tener longitud válida'; end if;
+ select coalesce(max(plantation_trip_number),0)+1 into v_next from public.trips where origin_farm_id=v_farm.id;
+ perform set_config('app.creating_plantation_trip','yes',true);
+ insert into public.trips(organization_id,driver_id,origin_farm_id,destination_name,vehicle_plate,status,created_by,plantation_folio,plantation_trip_number)
+ values(v_org,p_driver_id,v_farm.id,btrim(p_destination),upper(btrim(p_vehicle_plate)),'ASSIGNED',auth.uid(),v_farm.plantation_id||'-'||v_next,v_next) returning id into v_trip;
+ insert into public.trip_lots(trip_id,agave_lot_id,loaded_weight_kg,loaded_agave_count,created_by)
+ values(v_trip,p_lot_id,v_lot.actual_weight_kg,v_lot.agave_count,auth.uid());
+ insert into public.deliveries(organization_id,trip_id,recipient_company,status,created_by)
+ values(v_org,v_trip,btrim(p_destination),'PENDING',auth.uid());
+ return v_trip;
+end $$;
+
 -- Preserve the previous protections on harvests and deliveries.
 create or replace function public.enforce_pilot_status_transitions() returns trigger
 language plpgsql set search_path=public,pg_temp as $$
