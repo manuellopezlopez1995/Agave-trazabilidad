@@ -134,6 +134,10 @@ begin
  if v_trip.destination_id is not null then
   if v_destination is distinct from v_trip.destination_name then raise exception 'El destino fue fijado por administración' using errcode='insufficient_privilege'; end if;
   v_destination:=v_trip.destination_name;
+ elsif not public.is_admin_of_org(v_trip.organization_id) then
+  if v_trip.destination_name is null or v_destination is distinct from v_trip.destination_name then
+   raise exception 'Sólo administración puede definir el destino de un viaje histórico' using errcode='insufficient_privilege';
+  end if;
  end if;
  if v_destination is null or length(v_destination)>120 or v_plate is null or length(v_plate)>25 then raise exception 'Indica destino y placa válidos' using errcode='check_violation'; end if;
  if exists(select 1 from public.deliveries d where d.trip_id=p_trip_id and (d.status::text<>'PENDING' or lower(btrim(d.recipient_company))<>lower(v_destination))) then raise exception 'La entrega existente tiene otro comprador o ya fue cerrada' using errcode='check_violation'; end if;
