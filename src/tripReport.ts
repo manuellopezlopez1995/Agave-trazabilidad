@@ -10,7 +10,8 @@ const kg=(n:number|null)=>n==null?'Pendiente':`${n.toLocaleString('es-MX',{maxim
 export function buildTripReportLines(data:TripReportData):string[]{
  const destination=data.weighings?.find(w=>w.weighing_type==='DESTINATION');
  const totals=weightSummary(data.lots,data.deliveries.map(d=>({...d,trip_id:'this-trip'})),(data.weighings??[]).map(w=>({...w,trip_id:'this-trip'})));
- const lines=[`AGAVE / TRAZA | FOLIO ${data.folio}`,'EXPEDIENTE DE TRAZABILIDAD POR VIAJE',`Generado: ${data.generatedAt}`,`Estado documental: ${data.approvedAt?'CONCILIADO':'BORRADOR / EN PROCESO'}`,'',
+ const completed=data.status==='DELIVERED'&&data.deliveries.length>0&&data.deliveries.every(d=>d.status==='COMPLETED');
+ const lines=[`AGAVE / TRAZA | FOLIO ${data.folio}`,'EXPEDIENTE DE TRAZABILIDAD POR VIAJE',`Generado: ${data.generatedAt}`,`Estado documental: ${completed?'EXPEDIENTE FINAL / VIAJE COMPLETADO':'BORRADOR / EN PROCESO'}`,'',
  'ORIGEN Y COSECHA',`ID de plantacion: ${value(data.farm?.plantation_id)}`,`Predio: ${value(data.farm?.name)} (${value(data.farm?.code)})`,`Municipio / estado: ${value(data.farm?.municipality)} / ${value(data.farm?.state)}`];
  for(const harvest of data.harvests)lines.push(`Jima: ${harvest.trace_code} | cuadrilla: ${value(harvest.crew_id&&data.crewNames[harvest.crew_id])}`,`Fecha programada: ${value(harvest.scheduled_date)} | inicio: ${value(harvest.started_at)} | cierre: ${value(harvest.completed_at)}`,`Estado: ${harvest.status} | notas: ${value(harvest.notes)}`);
  lines.push('','LOTES COSECHADOS VINCULADOS');
