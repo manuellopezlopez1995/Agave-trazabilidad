@@ -23,6 +23,9 @@ BEGIN
  IF NEW.average_brix IS NULL OR NEW.average_brix<0 OR NEW.average_brix>50 THEN
   RAISE EXCEPTION 'Brix fuera de rango (0 a 50)' USING ERRCODE='check_violation';
  END IF;
+ IF TG_OP='INSERT' AND NEW.actual_weight_kg IS NOT NULL THEN
+  RAISE EXCEPTION 'Los lotes nuevos no admiten peso capturado manualmente' USING ERRCODE='check_violation';
+ END IF;
  IF NEW.actual_weight_kg IS NOT NULL AND (NEW.actual_weight_kg<=0 OR NEW.actual_weight_kg>200000) THEN
   RAISE EXCEPTION 'Peso histórico del lote fuera de rango' USING ERRCODE='check_violation';
  END IF;
@@ -40,6 +43,22 @@ BEGIN
 END; $$;
 CREATE TRIGGER validate_lot_brix_evidence BEFORE INSERT OR UPDATE OF agave_lot_id,harvest_order_id ON public.harvest_evidence
  FOR EACH ROW EXECUTE FUNCTION public.validate_lot_brix_evidence();
+
+-- Al final de la transacción, no puede quedar un lote nuevo sin su evidencia.
+-- La RPC inserta primero el lote y después la fotografía vinculada en la misma transacción.
+CREATE OR REPLACE FUNCTION public.require_lot_brix_evidence()
+RETURNS trigger LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
+BEGIN
+ IF NEW.actual_weight_kg IS NULL AND NOT EXISTS (
+  SELECT 1 FROM public.harvest_evidence e
+  WHERE e.agave_lot_id=NEW.id AND e.harvest_order_id=NEW.harvest_order_id
+ ) THEN RAISE EXCEPTION 'Registra una fotografía de °Brix vinculada al lote antes de guardarlo' USING ERRCODE='check_violation'; END IF;
+ RETURN NULL;
+END; $$;
+CREATE CONSTRAINT TRIGGER lot_requires_brix_photo
+ AFTER INSERT OR UPDATE OF average_brix,actual_weight_kg ON public.agave_lots
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+ EXECUTE FUNCTION public.require_lot_brix_evidence();
 
 CREATE OR REPLACE FUNCTION public.save_lot_with_brix_evidence(
  p_harvest_id uuid,p_agave_count integer,p_average_brix numeric,p_storage_path text,
