@@ -40,4 +40,11 @@ const screenWithTicket=parseTicket('10:12\n| IDR: 8716\n| 10:27 AM 25/09/26\n| 3
 assert.equal(screenWithTicket.fields.time,'10:27','la hora del ticket prevalece sobre la barra del teléfono');
 assert.equal(screenWithTicket.fields.folio,'8716');
 assert.equal(screenWithTicket.netKg,23350);
-console.log('Nueve escenarios de OCR y consistencia matemática correctos.');
+const noisy=parseTicketPasses([
+ {text:'Tel. 348 1180588\n10:46 AM 25/09/26\nID: 7461\n36570 KG BRUTO\n13 220 kq TaRa\n23350 ka NETN',confidence:67},
+ {text:'N° 7461\n36570 kg BRUTO\n13220 kg TARA\n23350 kg NETO',confidence:64}
+]);
+assert.deepEqual([noisy.fields.folio,noisy.fields.gross,noisy.fields.tare,noisy.fields.printedNet,noisy.netKg],['7461',36570,13220,23350,23350]);
+const reordered=parseTicket('NO. 9521\n23.350 KG NETO\n13.220 KG TARA\n36.570 KG BRUTO\nTel. 348 1180588',76);
+assert.deepEqual([reordered.fields.folio,reordered.fields.gross,reordered.fields.tare,reordered.netKg],['9521',36570,13220,23350]);
+console.log('Trece escenarios de OCR y consistencia matemática correctos.');
