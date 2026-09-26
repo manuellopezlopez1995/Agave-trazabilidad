@@ -22,7 +22,7 @@ export function partitionByBuyer(data:{trips:any[];links:any[];lots:any[];weighi
   group.deliveries=data.deliveries.filter(d=>tripIds.has(d.trip_id));
   const ticketIds=new Set(group.weighings.map(w=>w.id));
   const deliveryCodes=group.deliveries.map(d=>d.trace_code);
-  group.images=data.images.filter(i=>i.kind==='harvest'||i.kind==='ticket'&&ticketIds.has(i.label)||i.kind==='delivery'&&deliveryCodes.some(code=>i.label===`Entrega ${code}`));
+  group.images=data.images.filter(i=>i.kind==='harvest'||i.kind==='brix'&&lotIds.has(i.label)||i.kind==='ticket'&&ticketIds.has(i.label)||i.kind==='delivery'&&deliveryCodes.some(code=>i.label===`Entrega ${code}`));
  }
  if(!groups.size)groups.set('sin comprador asignado',{name:'Sin comprador asignado',key:'sin comprador asignado',trips:[],links:[],lots:data.lots,weighings:[],deliveries:[],images:data.images.filter(i=>i.kind==='harvest')});
  return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name,'es'));
