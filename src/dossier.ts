@@ -2,7 +2,7 @@ import {variance,recordedFieldWeight} from './operations';
 import {weightSummary} from './weightSummary';
 
 // Los identificadores técnicos sólo se utilizan para enlazar los datos y nunca se imprimen.
-export type DossierImage={kind:string;label:string;mime:string;base64:string;fileName:string;capturedAt?:string|null;uploadedBy?:string|null;latitude?:number|null;longitude?:number|null;legibilityConfirmed?:boolean};
+export type DossierImage={kind:string;label:string;mime:string;base64:string;fileName:string;capturedAt?:string|null;uploadedBy?:string|null;latitude?:number|null;longitude?:number|null;legibilityConfirmed?:boolean;evidenceCode?:string|null};
 export type DossierData={harvest:any;farm:any;crew:any;lots:any[];trips:any[];links:any[];weighings:any[];deliveries:any[];drivers:any[];images:DossierImage[];generatedAt:string;organizationName:string;buyerName:string;varianceLimitKg?:number;varianceLimitPercent?:number;varianceNotes?:any[];corrections?:any[]};
 const esc=(v:unknown)=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 const kg=(n:unknown)=>n==null?'No registrado':`${Number(n).toLocaleString('es-MX',{maximumFractionDigits:2})} kg`;
