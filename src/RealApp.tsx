@@ -41,6 +41,9 @@ function decimal(value:string,label:string,min:number,max:number){const normaliz
 function integer(value:string,label:string,min:number,max:number){const parsed=decimal(value,label,min,max);if(!Number.isInteger(parsed))throw Error(`${label} debe ser un número entero`);return parsed}
 function isoDate(value:string){if(!/^\d{4}-\d{2}-\d{2}$/.test(value))throw Error('La fecha debe tener el formato AAAA-MM-DD');const parsed=new Date(`${value}T00:00:00Z`);if(Number.isNaN(parsed.getTime())||parsed.toISOString().slice(0,10)!==value)throw Error('La fecha no es válida');return value}
 function jaliscoDate(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}
+function operationalDate(timeZone:string){return new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}
+function followingDate(date:string){const next=new Date(`${date}T00:00:00Z`);next.setUTCDate(next.getUTCDate()+1);return next.toISOString().slice(0,10)}
+function displayDate(date:string){const [year,month,day]=date.split('-');return `${day}/${month}/${year}`}
 function confirm(title:string,message:string,run:()=>void){if(Platform.OS==='web'){if(window.confirm(`${title}\n\n${message}`))run();return}Alert.alert(title,message,[{text:'Cancelar',style:'cancel'},{text:'Confirmar',style:'default',onPress:run}])}
 function showError(message:string){if(Platform.OS==='web')window.alert(message);else Alert.alert('No se pudo completar',message)}
 export default function RealApp(){
@@ -65,6 +68,7 @@ export default function RealApp(){
  const [closures,setClosures]=useState<Closure[]>([]),[finalDossiers,setFinalDossiers]=useState<FinalDossier[]>([]),[formalReady,setFormalReady]=useState(false);
  const [pendingCount,setPendingCount]=useState(0),[isOnline,setIsOnline]=useState(true);
  const [availableTrips,setAvailableTrips]=useState<AvailableTrip[]>([]),[tripEvents,setTripEvents]=useState<TripEvent[]>([]),[pendingTripCount,setPendingTripCount]=useState(0);
+ const [operationalTimezone,setOperationalTimezone]=useState('America/Mexico_City');
  useEffect(()=>{if(Platform.OS!=='web')return;const refresh=()=>{setIsOnline(navigator.onLine);setPendingTripCount(pendingTripArrivals().length);void pendingEvidence().then(items=>setPendingCount(items.length)).catch(()=>{})};refresh();window.addEventListener('online',refresh);window.addEventListener('offline',refresh);return()=>{window.removeEventListener('online',refresh);window.removeEventListener('offline',refresh)}},[]);
  useEffect(()=>()=>{if(photoUrl.startsWith('blob:'))URL.revokeObjectURL(photoUrl)},[photoUrl]);
  useEffect(()=>()=>{if(preparedPdf)URL.revokeObjectURL(preparedPdf.url)},[preparedPdf]);
@@ -76,6 +80,11 @@ export default function RealApp(){
  const load=useCallback(async()=>{if(!supabase||!session)return;setError('');try{
   const {data:p,error:pe}=await supabase.from('profiles').select('id,full_name,role,status').eq('id',session.user.id).single();check(pe);if(!p||p.status!=='ACTIVE')throw Error('Tu perfil no está activo.');setProfile(p as Profile);
   const {data:membership,error:me}=await supabase.from('organization_members').select('organization_id').eq('profile_id',session.user.id).eq('active',true).single();check(me);if(!membership)throw Error('No tienes una organización activa.');const org=membership.organization_id;setOrganizationId(org);
+  // Older deployments have no per-organization timezone; their operational date is Jalisco's.
+  if(p.role==='DRIVER'){
+   const calendar=await supabase.rpc('driver_operational_calendar');
+   if(!calendar.error&&calendar.data?.timezone)setOperationalTimezone(calendar.data.timezone);
+  }
   if(p.role==='ADMIN'){
    const {data:members,error:membersError}=await supabase.from('organization_members').select('profile_id').eq('organization_id',org).eq('active',true);
    if(membersError){setTeamError('No se pudo consultar el equipo de esta organización.');setTeam([])}
@@ -321,6 +330,8 @@ export default function RealApp(){
  };
  const todayInJalisco=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
  const dailyTrips=trips.filter(t=>t.status!=='DELIVERED'||(t.delivered_at&&new Intl.DateTimeFormat('en-CA',{timeZone:'America/Mexico_City',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(t.delivered_at))===todayInJalisco)||tripReview(t).missing.length>0);
+ const todayForLoads=operationalDate(operationalTimezone),tomorrowForLoads=followingDate(todayForLoads);
+ const loadsToday=availableTrips.filter(t=>t.date===todayForLoads),loadsTomorrow=availableTrips.filter(t=>t.date===tomorrowForLoads);
  const matchesTrip=(t:Trip)=>{const query=search.trim().toLocaleLowerCase('es-MX');if(!query)return true;
   const relatedLots=tripLots.filter(l=>l.trip_id===t.id).map(x=>lots.find(l=>l.id===x.agave_lot_id)).filter(Boolean);
   const fields=[t.trace_code,t.plantation_folio,t.vehicle_plate,t.destination_name,harvests.find(h=>h.id===t.harvest_order_id)?.trace_code,farms.find(f=>f.id===t.origin_farm_id)?.name,...relatedLots.map(l=>l!.trace_code),...relatedLots.map(l=>harvests.find(h=>h.id===l!.harvest_order_id)?.trace_code),...relatedLots.map(l=>farms.find(f=>f.id===l!.farm_id)?.name),...weighings.filter(w=>w.trip_id===t.id).map(w=>w.ticket_number),...deliveries.filter(d=>d.trip_id===t.id).map(d=>d.recipient_company)];
@@ -380,7 +391,15 @@ export default function RealApp(){
   {harvests.filter(h=>h.status==='CANCELLED').length>0&&<Text style={styles.muted}>Jimas canceladas: {harvests.filter(h=>h.status==='CANCELLED').length}</Text>}
  </>}
  {pane==='trips'&&<>
-  {profile?.role==='DRIVER'&&<><SectionTitle eyebrow="03 / TRAYECTO" title="VIAJES DE HOY" description="Jimas de hoy y mañana sin chofer. Tomar viaje requiere confirmación en línea."/>{availableTrips.map(card=><View key={card.trip_id} style={styles.card}><Text style={styles.heading}>{card.harvest_code} · {card.farm}</Text><Text>ID plantación: {card.plantation_id??'Pendiente'} · {card.crew??'Sin cuadrilla'}</Text><Text>Fecha: {card.date} · Pendiente de chofer · Viaje {card.folio??card.trip_code}</Text><Button label="TOMAR VIAJE" onPress={()=>void claimTrip(card.trip_id)} disabled={busy||!isOnline}/></View>)}{!availableTrips.length&&<Text style={styles.muted}>No hay viajes disponibles para hoy ni mañana.</Text>}<SectionTitle eyebrow="CHOFER / OPERACIÓN" title="MI VIAJE" description="Cada evento continúa ligado a la jima y al predio de origen."/></>}
+  {profile?.role==='DRIVER'&&<><SectionTitle eyebrow="03 / TRAYECTO" title="Cargas disponibles" description="Elige una carga de hoy o resérvala para mañana. La asignación se confirma en línea; reservar no inicia el viaje."/>
+   {([{label:'CARGAS DE HOY',date:todayForLoads,items:loadsToday},{label:'CARGAS DE MAÑANA',date:tomorrowForLoads,items:loadsTomorrow}] as const).map(group=><View key={group.label}>
+    <Text style={styles.heading}>{group.label} — {displayDate(group.date)}</Text>
+    {!group.items.length&&<Text style={styles.muted}>No hay cargas disponibles para esta fecha.</Text>}
+    {group.items.map(card=><View key={card.trip_id} style={styles.card}>
+     <Pressable accessibilityRole="button" onPress={()=>setSelected(selected===card.trip_id?'':card.trip_id)}><Text style={styles.heading}>{card.harvest_code} · {card.farm} {selected===card.trip_id?'▲':'▼'}</Text><Text>{card.crew??'Sin cuadrilla'} · {displayDate(card.date)} · Pendiente de chofer</Text></Pressable>
+     {selected===card.trip_id&&<><Text>Fecha programada de carga: {displayDate(card.date)}</Text><Text>Jima: {card.harvest_code} · Predio: {card.farm}</Text><Text>ID de plantación: {card.plantation_id??'Pendiente'} · Cuadrilla: {card.crew??'Sin cuadrilla'}</Text><Text>Viaje: {card.folio??card.trip_code} · Estado: PENDIENTE DE CHOFER</Text><Button label="TOMAR VIAJE" onPress={()=>confirm('Tomar viaje',`¿Reservar ${card.harvest_code} para el ${displayDate(card.date)}? El viaje quedará asignado a ti, pero no se iniciará.`,()=>void claimTrip(card.trip_id))} disabled={busy||!isOnline}/></>}
+    </View>)}
+   </View>)}<SectionTitle eyebrow="CHOFER / OPERACIÓN" title="MI VIAJE" description="Un viaje reservado para mañana sigue asignado, sin iniciarse hasta registrar la llegada al predio."/></>}
   {profile?.role!=='DRIVER'&&<SectionTitle eyebrow="03 / TRAYECTO" title="Viajes visibles" description="Del predio a destino con cada pesaje registrado."/>}
   {trips.filter(t=>profile?.role!=='DRIVER'||t.driver_id===session.user.id).map(t=><View key={t.id} style={styles.card}>
    <Pressable onPress={()=>setSelected(selected===t.id?'':t.id)}><Text style={styles.heading}>{t.plantation_folio??t.trace_code} {selected===t.id?'▲':'▼'}</Text><Text>{t.status} · {t.destination_name??'Sin destino'} · Ref. {t.trace_code}</Text></Pressable>
@@ -389,7 +408,7 @@ export default function RealApp(){
     {tripEvents.filter(e=>e.trip_id===t.id).map(e=><Text key={e.id} style={styles.small}>{new Date(e.recorded_at).toLocaleString('es-MX')} · {e.old_status??'CREADO'} → {e.new_status} · {team.find(p=>p.id===e.actor_id)?.full_name??drivers.find(p=>p.id===e.actor_id)?.full_name??e.actor_id??'Sistema'}{e.latitude!=null?` · GPS ${e.latitude}, ${e.longitude}`:''}</Text>)}
     {profile?.role==='ADMIN'&&t.harvest_order_id&&['PENDING_DRIVER','ASSIGNED'].includes(t.status)&&<><Text style={styles.heading}>Asignación y preparación</Text><Text>Asignar chofer manualmente:</Text>{drivers.map(d=><Button key={d.id} label={`${t.driver_id===d.id?'✓ ':''}${d.full_name}`} onPress={()=>confirm('Asignar chofer',`Asignar ${t.plantation_folio??t.trace_code} a ${d.full_name}`,()=>void assignTrip(t.id,d.id))} disabled={busy}/>)}<Input label="Comprador / destilería" value={destination} onChange={setDestination}/><Input label="Placa" value={vehiclePlate} onChange={setVehiclePlate}/><Button label="Guardar destino, placa y entrega" onPress={()=>void configureTrip(t.id)} disabled={busy}/></>}
     {profile?.role==='ADMIN'&&t.harvest_order_id&&t.status==='AT_FIELD'&&<><Input label="Comprador / destilería" value={destination} onChange={setDestination}/><Input label="Placa" value={vehiclePlate} onChange={setVehiclePlate}/><Button label="Guardar destino, placa y entrega" onPress={()=>void configureTrip(t.id)} disabled={busy}/></>}
-    {profile?.role==='DRIVER'&&t.harvest_order_id&&t.status==='ASSIGNED'&&<Button label="INICIAR VIAJE / REGISTRAR LLEGADA AL PREDIO" onPress={()=>void arriveAtField(t)} disabled={busy||pendingTripArrivals().some(e=>e.tripId===t.id)}/>}
+    {profile?.role==='DRIVER'&&t.harvest_order_id&&t.status==='ASSIGNED'&&<>{String(harvests.find(h=>h.id===t.harvest_order_id)?.scheduled_date??'')>todayForLoads&&<Text style={styles.muted}>Carga reservada para {displayDate(String(harvests.find(h=>h.id===t.harvest_order_id)?.scheduled_date))}. Podrás iniciar al llegar al predio ese día.</Text>}<Button label="INICIAR VIAJE / REGISTRAR LLEGADA AL PREDIO" onPress={()=>void arriveAtField(t)} disabled={busy||pendingTripArrivals().some(e=>e.tripId===t.id)||String(harvests.find(h=>h.id===t.harvest_order_id)?.scheduled_date??'')>todayForLoads}/></>}
     <Text>Placa: {t.vehicle_plate??'Sin registrar'} · Pesajes: {weighings.filter(w=>w.trip_id===t.id).length}</Text><Text>Campo − origen: {tripReview(t).comparison.originDifference??'—'} kg · Origen − destino: {tripReview(t).comparison.transitDifference??'—'} kg · Destino − recepción: {tripReview(t).comparison.receiptDifference??'—'} kg</Text>{tripReview(t).comparison.exceeded&&<Text style={styles.error}>Diferencia superior a {tripReview(t).comparison.threshold.toFixed(2)} kg. Registra explicación antes de cerrar.</Text>}{varianceNotes.filter(n=>n.trip_id===t.id).map((n,i)=><Text key={i}>Explicación: {n.reason}</Text>)}
     {weighings.filter(w=>w.trip_id===t.id).map(w=><View key={w.id}><Text>{w.weighing_type}: bruto {w.gross_weight_kg} − tara {w.tare_weight_kg} = neto {w.net_weight_kg} kg</Text>{w.ticket_storage_path&&<Button label="Ver ticket" onPress={()=>openPhoto('weighing-tickets',w.ticket_storage_path!)}/>}</View>)}
     {(profile?.role==='ADMIN'||profile?.role==='DRIVER'&&t.driver_id===session.user.id)&&<>
