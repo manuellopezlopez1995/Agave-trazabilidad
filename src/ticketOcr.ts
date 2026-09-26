@@ -6,7 +6,7 @@ type Candidate={value:number;quality:number};
 type Pass={text:string;confidence:number};
 
 const amount='(?:\\d{1,3}(?:[., ]\\d{3})+|\\d{3,6})(?:[.,]\\d{1,2})?';
-const unit='(?:\\s*(?:kg|kgs|kilogramos?))?';
+const unit='(?:\\s*(?:k[gaq9]s?|kilogramos?))?';
 function kilograms(raw:string):number|undefined{
  const compact=raw.replace(/\s/g,'');let normalized=compact;
  if(/[.,]/.test(compact)){
@@ -17,7 +17,8 @@ function kilograms(raw:string):number|undefined{
 }
 function weightCandidates(text:string,label:'bruto'|'tara'|'neto'):Candidate[]{
  const output:Candidate[]=[];
- const labelRe=new RegExp(`\\b(?:peso\\s+)?${label}\\b`,'i');
+ const printedLabel=label==='bruto'?'brut[0o]':label==='neto'?'net[0o]':'tara';
+ const labelRe=new RegExp(`\\b(?:peso\\s+)?${printedLabel}\\b`,'i');
  for(const raw of text.split(/\r?\n/)){
   const line=raw.trim(),found=labelRe.exec(line);if(!found)continue;
   const before=line.slice(0,found.index),after=line.slice(found.index+found[0].length);
@@ -34,7 +35,7 @@ function weightCandidates(text:string,label:'bruto'|'tara'|'neto'):Candidate[]{
 function folioCandidates(text:string):{value:string;quality:number}[]{
  const output:{value:string;quality:number}[]=[];
  for(const line of text.split(/\r?\n/)){
-  const found=line.match(/\b(?:ID|folio|ticket|boleta|n[úu]mero\s+de\s+(?:ticket|boleta))\b\s*(?:n[úu]m(?:ero)?\.?)?\s*[:#=.-]*\s*([A-Z0-9][A-Z0-9-]{1,39})/i);
+  const found=line.match(/\b(?:[i1l]d[r#]?|folio|ticket|boleta|n[úu]mero\s+de\s+(?:ticket|boleta))\b\s*(?:n[úu]m(?:ero)?\.?)?\s*[:#=.-]*\s*([A-Z0-9][A-Z0-9-]{1,39})/i);
   if(found&&/\d/.test(found[1]))output.push({value:found[1],quality:90});
  }
  return output;
@@ -47,12 +48,15 @@ function mostLikely<T extends string|number>(items:{value:T;quality:number}[]):{
 export function parseTicketPasses(passes:Pass[]):TicketReading{
  const candidates={gross:[] as Candidate[],tare:[] as Candidate[],printedNet:[] as Candidate[],folio:[] as {value:string;quality:number}[]};
  const fields:TicketFields={},fieldConfidence:TicketReading['fieldConfidence']={};
+ let pairedTimestamp=false;
  for(const pass of passes){
   for(const key of ['gross','tare','printedNet'] as const)candidates[key].push(...weightCandidates(pass.text,key==='gross'?'bruto':key==='tare'?'tara':'neto'));
   candidates.folio.push(...folioCandidates(pass.text));
   for(const line of pass.text.split(/\r?\n/)){
-   const date=line.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/);if(date&&!fields.date)fields.date=date[1];
-   const time=line.match(/\b([01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\b/);if(time&&!fields.time)fields.time=time[0];
+   const date=line.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/);
+   const time=line.match(/\b([01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\b/);
+   if(date&&time&&!pairedTimestamp){fields.date=date[1];fields.time=time[0];pairedTimestamp=true}
+   else if(!pairedTimestamp){if(date&&!fields.date)fields.date=date[1];if(time&&!fields.time)fields.time=time[0]}
   }
  }
  const ranked=(values:Candidate[])=>[...new Set(values.map(x=>x.value))].map(value=>({value,quality:Math.max(...values.filter(x=>x.value===value).map(x=>x.quality)),votes:values.filter(x=>x.value===value).length})).sort((a,b)=>(b.votes*20+b.quality)-(a.votes*20+a.quality));
@@ -78,22 +82,28 @@ export function parseTicket(text:string,confidence:number):TicketReading{return 
 
 // Only the recognition copies are modified; the original camera photograph stays intact.
 async function recognitionCopies(blob:Blob):Promise<Blob[]>{
- if(typeof document==='undefined'||typeof createImageBitmap==='undefined')return [];
- const bitmap=await createImageBitmap(blob);try{
+ if(typeof document==='undefined')return [];
+ // HTMLImageElement works on iOS Safari even where createImageBitmap is absent or unreliable.
+ const url=URL.createObjectURL(blob);
+ const image=new window.Image();
+ try{
+  await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(Error('No se pudo abrir el ticket para OCR'));image.src=url});
+  const imageWidth=image.naturalWidth,imageHeight=image.naturalHeight;
+  if(!imageWidth||!imageHeight)throw Error('La imagen del ticket está vacía');
   const areas=[{x:0,y:0,w:1,h:1},{x:.1,y:.1,w:.8,h:.8},{x:.15,y:.03,w:.7,h:.55}];
   const output:Blob[]=[];
   for(const area of areas){
-   const width=Math.round(Math.min(2200,Math.max(1400,bitmap.width*area.w*2)));
-   const canvas=document.createElement('canvas');canvas.width=width;canvas.height=Math.round(width*bitmap.height*area.h/(bitmap.width*area.w));
+   const width=Math.round(Math.min(2200,Math.max(1400,imageWidth*area.w*2)));
+   const canvas=document.createElement('canvas');canvas.width=width;canvas.height=Math.round(width*imageHeight*area.h/(imageWidth*area.w));
    const context=canvas.getContext('2d',{willReadFrequently:true});if(!context)continue;
-   context.drawImage(bitmap,bitmap.width*area.x,bitmap.height*area.y,bitmap.width*area.w,bitmap.height*area.h,0,0,canvas.width,canvas.height);
+   context.drawImage(image,imageWidth*area.x,imageHeight*area.y,imageWidth*area.w,imageHeight*area.h,0,0,canvas.width,canvas.height);
    const pixels=context.getImageData(0,0,canvas.width,canvas.height);
    for(let i=0;i<pixels.data.length;i+=4){const v=Math.round(.299*pixels.data[i]+.587*pixels.data[i+1]+.114*pixels.data[i+2]);pixels.data[i]=pixels.data[i+1]=pixels.data[i+2]=Math.max(0,Math.min(255,(v-128)*1.2+128))}
    context.putImageData(pixels,0,0);
    const copy=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,'image/png'));if(copy)output.push(copy);
   }
   return output;
- }finally{bitmap.close()}
+ }finally{URL.revokeObjectURL(url)}
 }
 export async function readTicket(blob:Blob):Promise<TicketReading>{
  let worker:Awaited<ReturnType<typeof createWorker>>|undefined;
