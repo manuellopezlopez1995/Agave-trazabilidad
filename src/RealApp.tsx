@@ -199,12 +199,13 @@ export default function RealApp(){
   if(exporting)return;setExporting(true);setError('');
   try{
    // Releer al exportar: el expediente no debe basarse en tarjetas que pudieron quedar desactualizadas.
-   const [hr,fr,cr,lr]=await Promise.all([
+   const [hr,fr,cr,lr,orgResult]=await Promise.all([
     supabase.from('harvest_orders').select('id,trace_code,farm_id,crew_id,status,scheduled_date,started_at,completed_at,notes').eq('id',h.id).eq('organization_id',organizationId).single(),
-    supabase.from('farms').select('id,code,name,municipality,state').eq('id',h.farm_id).eq('organization_id',organizationId).single(),
+    supabase.from('farms').select('id,code,name,plantation_id,municipality,state').eq('id',h.farm_id).eq('organization_id',organizationId).single(),
     h.crew_id?supabase.from('crews').select('id,name').eq('id',h.crew_id).eq('organization_id',organizationId).single():Promise.resolve({data:null,error:null}),
-    supabase.from('agave_lots').select('id,trace_code,agave_count,average_brix,actual_weight_kg').eq('harvest_order_id',h.id).eq('organization_id',organizationId)
-   ]);for(const r of [hr,fr,cr,lr])check(r.error);if(!hr.data||!fr.data)throw Error('La jima o el predio ya no están disponibles para esta organización.');
+    supabase.from('agave_lots').select('id,trace_code,agave_count,average_brix,actual_weight_kg').eq('harvest_order_id',h.id).eq('organization_id',organizationId),
+    supabase.from('organizations').select('name').eq('id',organizationId).single()
+   ]);for(const r of [hr,fr,cr,lr,orgResult])check(r.error);if(!hr.data||!fr.data||!orgResult.data?.name)throw Error('La jima, el predio o el proveedor no están disponibles para esta organización.');
    const lotIds=(lr.data??[]).map(l=>l.id);
    const linksResult=lotIds.length?await supabase.from('trip_lots').select('trip_id,agave_lot_id,loaded_weight_kg').in('agave_lot_id',lotIds):{data:[],error:null};check(linksResult.error);
    const tripIds=[...new Set((linksResult.data??[]).map(l=>l.trip_id))];
@@ -233,7 +234,7 @@ export default function RealApp(){
    }
    const groups=partitionByBuyer({lots:lr.data??[],trips:tr.data??[],links:linksResult.data??[],weighings:wr.data??[],deliveries:dr.data??[],images});
    const group=groups.find(g=>g.key===buyerFilter);if(!group)throw Error('La asignación del comprador cambió; actualiza la pantalla y vuelve a intentar.');
-    const result=buildDossier({harvest:hr.data,farm:fr.data,crew:cr.data,lots:group.lots,trips:group.trips,links:group.links,weighings:group.weighings,deliveries:group.deliveries,drivers:driversResult.data??[],images:group.images,generatedAt:new Date().toISOString(),organizationId,buyerName:group.name,varianceLimitKg,varianceLimitPercent,varianceNotes,corrections});
+    const result=buildDossier({harvest:hr.data,farm:fr.data,crew:cr.data,lots:group.lots,trips:group.trips,links:group.links,weighings:group.weighings,deliveries:group.deliveries,drivers:driversResult.data??[],images:group.images,generatedAt:new Date().toISOString(),organizationName:orgResult.data.name,buyerName:group.name,varianceLimitKg,varianceLimitPercent,varianceNotes,corrections});
     const file=new Blob([result.html],{type:'text/html;charset=utf-8'}),url=URL.createObjectURL(file),anchor=document.createElement('a');anchor.href=url;anchor.download=`expediente-${h.trace_code.replace(/[^a-zA-Z0-9_-]/g,'_')}-${group.name.replace(/[^a-zA-Z0-9_-]/g,'_')}-${result.complete?'completo':'borrador'}.html`;document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
    if(!result.complete)showError(`El expediente de ${group.name} se descargó como BORRADOR. Revisa los pendientes dentro del archivo.`);
  }catch(e){const message=`No se pudo generar el expediente: ${String(e)}`;setError(message);showError(message)}finally{setExporting(false)}
@@ -292,7 +293,8 @@ export default function RealApp(){
    const s=issued.snapshot;const refs=[...(s.harvest_evidence??[]).map((p:any)=>({kind:'harvest',label:`Jima ${s.harvest.trace_code}`,bucket:p.storage_bucket,path:p.storage_path,meta:p})),...(s.weighings??[]).filter((w:any)=>w.ticket_storage_path).map((w:any)=>({kind:'ticket',label:w.id,bucket:w.storage_bucket||'weighing-tickets',path:w.ticket_storage_path,meta:{captured_at:w.captured_at,uploaded_by:w.recorded_by,latitude:w.latitude,longitude:w.longitude,legibility_confirmed:w.legibility_confirmed}})),...(s.receipts??[]).map((p:any)=>({kind:'delivery',label:`Entrega ${(s.deliveries??[]).find((d:any)=>d.id===p.delivery_id)?.trace_code??p.delivery_id}`,bucket:p.storage_bucket,path:p.storage_path,meta:p}))];
    const images:DossierImage[]=[];
    for(const ref of refs){const {data:blob,error:photoError}=await supabase.storage.from(ref.bucket).download(ref.path);check(photoError);if(!blob||!blob.type.startsWith('image/'))throw Error(`No se recuperó la evidencia ${ref.path}`);const base64=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('No se pudo leer la fotografía'));reader.readAsDataURL(blob)});images.push({kind:ref.kind,label:ref.label,mime:blob.type,base64,fileName:ref.path.split('/').pop()||'foto',capturedAt:ref.meta.captured_at,uploadedBy:ref.meta.uploaded_by,latitude:ref.meta.latitude,longitude:ref.meta.longitude,legibilityConfirmed:ref.meta.legibility_confirmed});}
-   const html=renderIssuedDossier(issued,images);const url=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'}));const anchor=document.createElement('a');anchor.href=url;anchor.download=`expediente-final-${s.harvest.trace_code}-${issued.buyer_name.replace(/[^a-zA-Z0-9_-]/g,'_')}-v${issued.version}.html`;document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+   const {data:org,error:orgError}=await supabase.from('organizations').select('name').eq('id',issued.snapshot.organization_id).single();check(orgError);if(!org?.name)throw Error('No se pudo identificar al proveedor de esta versión');
+   const html=renderIssuedDossier(issued,images,org.name);const url=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'}));const anchor=document.createElement('a');anchor.href=url;anchor.download=`expediente-final-${s.harvest.trace_code}-${issued.buyer_name.replace(/[^a-zA-Z0-9_-]/g,'_')}-v${issued.version}.html`;document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
   }catch(e){showError(`No se pudo recuperar la versión final: ${String(e)}`)}finally{setExporting(false)}
  };
  const advanceTrip=(trip:Trip)=>action(async()=>{
