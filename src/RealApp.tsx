@@ -32,6 +32,8 @@ type Pane='home'|'farms'|'harvests'|'trips'|'team'|'control'|'plantations';
 const green='#164B3A';
 const roleNames:Record<Role,string>={ADMIN:'Administración',CREW_LEADER:'Jefe de cuadrilla',DRIVER:'Chofer de agave'};
 const teamTargets:Record<Role,number>={ADMIN:2,CREW_LEADER:5,DRIVER:10};
+// Same predicate as harvest_one_crew_per_day: completed/cancelled work releases the crew.
+const activeCrewHarvestStatuses=new Set(['PLANNED','ASSIGNED','IN_PROGRESS']);
 const landscape=Platform.OS==='web'?{uri:'/Agave-trazabilidad/altos-agave.svg'}:null;
 function SectionTitle({eyebrow,title,description}:{eyebrow:string;title:string;description?:string}){return <View style={styles.sectionHead}><Text style={styles.eyebrow}>{eyebrow}</Text><Text style={styles.title}>{title}</Text>{description?<Text style={styles.muted}>{description}</Text>:null}</View>}
 function Button({label,onPress,disabled=false}:{label:string;onPress:()=>void;disabled?:boolean}){return <Pressable disabled={disabled} onPress={onPress} style={[styles.button,disabled&&{opacity:.5}]}><Text style={styles.buttonText}>{label}</Text></Pressable>}
@@ -155,6 +157,7 @@ export default function RealApp(){
    const scheduled_date=isoDate(row.date);
    const key=`${row.crewId}:${scheduled_date}`;
    if(seen.has(key))throw Error(`Jima ${index+1}: esta cuadrilla ya aparece en otra fila para ${scheduled_date}`);
+   if(harvests.some(h=>h.crew_id===row.crewId&&h.scheduled_date===scheduled_date&&activeCrewHarvestStatuses.has(h.status)))throw Error(`Jima ${index+1}: la cuadrilla tiene una jima activa para ${scheduled_date}; finalízala antes de programar otra`);
    seen.add(key);
    return {farm_id:row.farmId,crew_id:row.crewId,scheduled_date};
   });
