@@ -2,8 +2,9 @@ import {createWorker} from 'tesseract.js';
 
 export type TicketFields={gross?:number;tare?:number;printedNet?:number;folio?:string;date?:string;time?:string};
 export type TicketReading={fields:TicketFields;netKg?:number;confidence:number;fieldConfidence:Partial<Record<keyof TicketFields,number>>;warnings:string[]};
-type Candidate={value:number;quality:number};
-type Pass={text:string;confidence:number};
+type Candidate={value:number;quality:number;line?:string};
+type OcrLine={text:string;confidence:number;bbox?:unknown;words?:{text:string;confidence:number;bbox?:unknown}[]};
+type Pass={text:string;confidence:number;lines?:OcrLine[];name?:string};
 
 const amount='(?:\\d{1,3}(?:[., ]\\d{3})+|\\d{3,6})(?:[.,]\\d{1,2})?';
 const unit='(?:\\s*(?:k[gaq9]s?|kilogramos?))?';
@@ -15,9 +16,9 @@ function kilograms(raw:string):number|undefined{
  }
  const n=Number(normalized);return Number.isFinite(n)&&n>=0&&n<=200000?n:undefined;
 }
-function weightCandidates(text:string,label:'bruto'|'tara'|'neto'):Candidate[]{
+function weightCandidates(text:string,label:'bruto'|'tara'|'neto',lines:OcrLine[]=[]):Candidate[]{
  const output:Candidate[]=[];
- const printedLabel=label==='bruto'?'brut[0o]':label==='neto'?'net[0o]':'tara';
+ const printedLabel=label==='bruto'?'brut[0o]':label==='neto'?'net[0on]':'tara';
  const labelRe=new RegExp(`\\b(?:peso\\s+)?${printedLabel}\\b`,'i');
  for(const raw of text.split(/\r?\n/)){
   const line=raw.trim(),found=labelRe.exec(line);if(!found)continue;
@@ -28,7 +29,8 @@ function weightCandidates(text:string,label:'bruto'|'tara'|'neto'):Candidate[]{
   const n=kilograms(match[1]);if(n===undefined)continue;
   const margin=left?before.slice(0,left.index):'';
   if(margin.length>20||/\d{3,}/.test(margin))continue;
-  output.push({value:n,quality:margin.trim()?75:90});
+  const ocrLine=lines.find(x=>x.text.trim()===line);
+  output.push({value:n,quality:ocrLine?Math.round((margin.trim()?75:90)*.35+ocrLine.confidence*.65):(margin.trim()?75:90),line});
  }
  return output;
 }
@@ -36,8 +38,8 @@ function folioCandidates(text:string):{value:string;quality:number}[]{
  const output:{value:string;quality:number}[]=[];
  for(const line of text.split(/\r?\n/)){
   // ID# may be recognized as 1D, IDR or ID#. Require a nearby numeric value.
-  const found=line.match(/\b(?:[i1l]d[r#]?|folio|ticket|boleta|n(?:o|º|°|úm(?:ero)?)\.?|n[úu]mero\s+de\s+(?:ticket|boleta))\s*[:#=.-]*\s*([A-Z0-9][A-Z0-9-]{1,38}[A-Z0-9])(?![A-Z0-9-])/i);
-  if(found&&/\d/.test(found[1])&&!/\b(?:tel|teléfono|phone)\b/i.test(line.slice(0,found.index)))output.push({value:found[1],quality:90});
+  const found=line.match(/\b(?:[i1l]d[r#]?|d[h#]|folio|ticket|boleta|n(?:o|º|°|úm(?:ero)?)\.?|n[úu]mero\s+de\s+(?:ticket|boleta))\s*[:#=.-]*\s*([A-Z0-9][A-Z0-9-]{1,38}[A-Z0-9])(?![A-Z0-9-])/i);
+  if(found&&/\d/.test(found[1])&&!/\b(?:tel|teléfono|phone)\b/i.test(line.slice(0,found.index)))output.push({value:found[1],quality:/\bDH\b/i.test(line)?65:90});
  }
  return output;
 }
@@ -51,7 +53,7 @@ export function parseTicketPasses(passes:Pass[]):TicketReading{
  const fields:TicketFields={},fieldConfidence:TicketReading['fieldConfidence']={};
  let pairedTimestamp=false;
  for(const pass of passes){
-  for(const key of ['gross','tare','printedNet'] as const)candidates[key].push(...weightCandidates(pass.text,key==='gross'?'bruto':key==='tare'?'tara':'neto'));
+  for(const key of ['gross','tare','printedNet'] as const)candidates[key].push(...weightCandidates(pass.text,key==='gross'?'bruto':key==='tare'?'tara':'neto',pass.lines));
   candidates.folio.push(...folioCandidates(pass.text));
   for(const line of pass.text.split(/\r?\n/)){
    const date=line.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/);
@@ -60,9 +62,9 @@ export function parseTicketPasses(passes:Pass[]):TicketReading{
    else if(!pairedTimestamp){if(date&&!fields.date)fields.date=date[1];if(time&&!fields.time)fields.time=time[0]}
   }
  }
- const ranked=(values:Candidate[])=>[...new Set(values.map(x=>x.value))].map(value=>({value,quality:Math.max(...values.filter(x=>x.value===value).map(x=>x.quality)),votes:values.filter(x=>x.value===value).length})).sort((a,b)=>(b.votes*20+b.quality)-(a.votes*20+a.quality));
+ const ranked=(values:Candidate[])=>[...new Set(values.map(x=>x.value))].map(value=>({value,quality:Math.max(...values.filter(x=>x.value===value).map(x=>x.quality)),votes:values.filter(x=>x.value===value).length})).sort((a,b)=>(b.votes*10+b.quality)-(a.votes*10+a.quality));
  const gross=ranked(candidates.gross),tare=ranked(candidates.tare),printed=ranked(candidates.printedNet);
- const consistent=printed.flatMap(n=>gross.flatMap(g=>tare.filter(t=>g.value>t.value&&Math.abs(g.value-t.value-n.value)<=2).map(t=>({g,t,n,score:g.votes+t.votes+n.votes+(Math.abs(g.value-t.value-n.value)<.01?2:0)})))).sort((a,b)=>b.score-a.score)[0];
+ const consistent=printed.flatMap(n=>gross.flatMap(g=>tare.filter(t=>g.value>t.value&&Math.abs(g.value-t.value-n.value)<=2).map(t=>({g,t,n,score:g.quality+t.quality+n.quality+Math.min(g.votes,3)*8+Math.min(t.votes,3)*8+Math.min(n.votes,3)*8+(Math.abs(g.value-t.value-n.value)<.01?15:0)})))).sort((a,b)=>b.score-a.score)[0];
  const selectedG=consistent?.g??gross[0],selectedT=consistent?.t??tare[0],selectedN=consistent?.n??printed[0];
  // Never derive a gross value from tare + net alone. If the OCR candidates
  // disagree with a clearly printed tare and net, leave gross for review.
@@ -83,6 +85,14 @@ export function parseTicketPasses(passes:Pass[]):TicketReading{
  return {fields,netKg,fieldConfidence,confidence:passes.length?Math.round(Math.max(...passes.map(x=>x.confidence))):0,warnings};
 }
 export function parseTicket(text:string,confidence:number):TicketReading{return parseTicketPasses([{text,confidence}])}
+function linesFromBlocks(blocks:any[]|null|undefined):OcrLine[]{
+ return (blocks??[]).flatMap(block=>(block.paragraphs??[]).flatMap((p:any)=>(p.lines??[]).map((l:any)=>({text:String(l.text??'').trim(),confidence:Number(l.confidence??0),bbox:l.bbox,words:(l.words??[]).map((w:any)=>({text:String(w.text),confidence:Number(w.confidence??0),bbox:w.bbox}))}))));
+}
+function candidateDiagnostics(pass:Pass){
+ const candidates={gross:weightCandidates(pass.text,'bruto',pass.lines),tare:weightCandidates(pass.text,'tara',pass.lines),net:weightCandidates(pass.text,'neto',pass.lines),folio:folioCandidates(pass.text)};
+ const inspected=(pass.lines?.map(x=>x.text)??pass.text.split(/\r?\n/)).filter(x=>/\b(?:brut[0o]|tara|net[0on]|folio|ticket|boleta|[i1l]d|dh|n[°o]\.?|\d{4,6}\s*k[gaq9])\b/i.test(x));
+ return {...pass,candidates,inspected:inspected.map(line=>({line,reason:Object.values(candidates).some(items=>items.some((item:any)=>item.line===line||item.value&&line.includes(String(item.value))))?'Candidato conservado':'Sin candidato numérico confiable en contexto de etiqueta'}))};
+}
 
 // Only the recognition copies are modified; the original camera photograph stays intact.
 async function recognitionCopies(blob:Blob):Promise<Blob[]>{
@@ -94,7 +104,9 @@ async function recognitionCopies(blob:Blob):Promise<Blob[]>{
   await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(Error('No se pudo abrir el ticket para OCR'));image.src=url});
   const imageWidth=image.naturalWidth,imageHeight=image.naturalHeight;
   if(!imageWidth||!imageHeight)throw Error('La imagen del ticket está vacía');
-  const areas=[{x:0,y:0,w:1,h:1},{x:.1,y:.1,w:.8,h:.8},{x:.15,y:.03,w:.7,h:.55}];
+ // Narrow center crops give thermal-print numerals enough pixels for Tesseract.
+ // Broad crops remain independent, so a bad crop cannot erase a prior candidate.
+ const areas=[{x:.1,y:.1,w:.8,h:.8},{x:.15,y:.03,w:.7,h:.55},{x:.23,y:.12,w:.54,h:.38},{x:.22,y:.34,w:.56,h:.44}];
   const output:Blob[]=[];
   for(const area of areas){
    const width=Math.round(Math.min(2200,Math.max(1400,imageWidth*area.w*2)));
@@ -114,17 +126,17 @@ export async function readTicket(blob:Blob):Promise<TicketReading>{
  const deadline=Date.now()+45000,passes:Pass[]=[];
  try{
   worker=await createWorker('spa+eng');
-  const first=await worker.recognize(blob);passes.push({text:first.data.text,confidence:first.data.confidence});
+  const first=await worker.recognize(blob,{}, {text:true,blocks:true});passes.push({text:first.data.text,confidence:first.data.confidence,lines:linesFromBlocks(first.data.blocks),name:'original'});
   let reading=parseTicketPasses(passes);
-  if(!reading.fields.folio||reading.fields.gross===undefined||reading.fields.tare===undefined||reading.warnings.some(x=>x.includes('neto impreso'))){
-   for(const copy of await recognitionCopies(blob)){
+  if(!reading.fields.folio||reading.fields.gross===undefined||reading.fields.tare===undefined||reading.fields.printedNet===undefined||reading.warnings.some(x=>x.includes('neto impreso'))){
+   for(const [index,copy] of (await recognitionCopies(blob)).entries()){
     if(Date.now()>deadline)break;
-    const result=await worker.recognize(copy);passes.push({text:result.data.text,confidence:result.data.confidence});
+    const result=await worker.recognize(copy,{}, {text:true,blocks:true});passes.push({text:result.data.text,confidence:result.data.confidence,lines:linesFromBlocks(result.data.blocks),name:`recorte ${index+1}`});
     reading=parseTicketPasses(passes);
-    if(reading.fields.folio&&reading.fields.gross!==undefined&&reading.fields.tare!==undefined&&!reading.warnings.some(x=>x.includes('neto impreso')))break;
+    if(reading.fields.folio&&reading.fields.gross!==undefined&&reading.fields.tare!==undefined&&reading.fields.printedNet!==undefined&&!reading.warnings.some(x=>x.includes('neto impreso')))break;
    }
   }
-  console.debug('Diagnóstico OCR de ticket',passes.map(x=>({text:x.text,confidence:x.confidence,gross:weightCandidates(x.text,'bruto'),tare:weightCandidates(x.text,'tara'),net:weightCandidates(x.text,'neto'),folio:folioCandidates(x.text)})),{fields:reading.fields,fieldConfidence:reading.fieldConfidence,warnings:reading.warnings});
+  console.debug('Diagnóstico OCR de ticket',passes.map(candidateDiagnostics),{fields:reading.fields,fieldConfidence:reading.fieldConfidence,warnings:reading.warnings});
   return reading;
  }finally{if(worker)await worker.terminate()}
 }
