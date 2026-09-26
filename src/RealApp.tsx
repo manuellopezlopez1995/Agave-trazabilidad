@@ -2,7 +2,8 @@ import React,{useCallback,useEffect,useState} from 'react';
 import {ActivityIndicator,Alert,Image,Linking,Platform,Pressable,SafeAreaView,ScrollView,StyleSheet,Text,TextInput,View} from 'react-native';
 import {Session} from '@supabase/supabase-js';
 import {supabase} from './backend';
-import {captureEvidence} from './evidence';
+import {captureEvidence,photographTicket,saveConfirmedTicket,TicketDraft} from './evidence';
+import {readTicket,TicketReading} from './ticketOcr';
 import {buildDossier,DossierImage} from './dossier';
 import {renderIssuedDossier} from './finalDossier';
 import {makeTripPdf,PdfPhoto} from './tripPdf';
@@ -57,6 +58,10 @@ export default function RealApp(){
  const [lotCount,setLotCount]=useState(''),[lotBrix,setLotBrix]=useState(''),[lotWeight,setLotWeight]=useState(''),[editingLotId,setEditingLotId]=useState('');
  const [tripLotId,setTripLotId]=useState(''),[tripDriverId,setTripDriverId]=useState(''),[destination,setDestination]=useState(''),[vehiclePlate,setVehiclePlate]=useState('');
  const [gross,setGross]=useState(''),[tare,setTare]=useState(''),[ticketNumber,setTicketNumber]=useState('');
+ const [printedNetInput,setPrintedNetInput]=useState('');
+ const [ticketDraft,setTicketDraft]=useState<{tripId:string;type:'ORIGIN'|'DESTINATION';photo:TicketDraft;reading:TicketReading}|null>(null);
+ const [ticketReadingBusy,setTicketReadingBusy]=useState(false);
+ const [ticketPreview,setTicketPreview]=useState('');
  const [photoUrl,setPhotoUrl]=useState('');
  const [photoLoading,setPhotoLoading]=useState(false),[exporting,setExporting]=useState(false);
  const [preparedPdf,setPreparedPdf]=useState<{tripId:string;url:string;name:string}|null>(null);
@@ -70,6 +75,7 @@ export default function RealApp(){
  const [operationalTimezone,setOperationalTimezone]=useState('America/Mexico_City');
  useEffect(()=>{if(Platform.OS!=='web')return;const refresh=()=>{setIsOnline(navigator.onLine);setPendingTripCount(pendingTripArrivals().length);void pendingEvidence().then(items=>setPendingCount(items.length)).catch(()=>{})};refresh();window.addEventListener('online',refresh);window.addEventListener('offline',refresh);return()=>{window.removeEventListener('online',refresh);window.removeEventListener('offline',refresh)}},[]);
  useEffect(()=>()=>{if(photoUrl.startsWith('blob:'))URL.revokeObjectURL(photoUrl)},[photoUrl]);
+ useEffect(()=>()=>{if(ticketPreview.startsWith('blob:'))URL.revokeObjectURL(ticketPreview)},[ticketPreview]);
  useEffect(()=>()=>{if(preparedPdf)URL.revokeObjectURL(preparedPdf.url)},[preparedPdf]);
  useEffect(()=>{if(!supabase)return;supabase.auth.getSession().then(({data:{session},error})=>{if(error)setError(error.message);setSession(session);setLoading(false)});const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{setSession(next);if(!next){setProfile(null);setOrganizationId('');setFarms([]);setCrews([]);setHarvests([]);setLots([]);setTrips([]);setTripLots([]);setDeliveries([]);setWeighings([]);setHarvestPhotos([]);setDeliveryPhotos([]);setDrivers([]);setTeam([])}});return()=>subscription.unsubscribe()},[]);
  useEffect(()=>{if(!session||!isOnline||Platform.OS!=='web'||!pendingTripArrivals().some(x=>x.actorId===session.user.id))return;
@@ -273,13 +279,31 @@ export default function RealApp(){
   if(trips.some(t=>t.harvest_order_id===lot.harvest_order_id))throw Error('Esta jima ya tiene viaje automático: prepara la carga y la entrega desde la tarjeta de ese viaje');
   const {data:tripId,error:tripError}=await supabase.rpc('create_plantation_trip',{p_lot_id:lot.id,p_driver_id:tripDriverId,p_destination:destinationName,p_vehicle_plate:plate});check(tripError);if(!tripId)throw Error('No se creó el viaje');setTripLotId('');setTripDriverId('');setVehiclePlate('');setDestination('');
  });
+ const startTicket=async(trip:Trip)=>{
+  // Launch camera synchronously from the tap, before any network/permission awaits.
+  const photographed=photographTicket();setTicketReadingBusy(true);
+  try{const photo=await photographed;if(!photo)return;
+   const type=trip.status==='ARRIVED'?'DESTINATION':'ORIGIN';if(!['LOADING','ARRIVED'].includes(trip.status))throw Error('Fotografía el ticket de origen en carga o el de destino después de llegar');
+   let reading:TicketReading;
+   try{reading=await readTicket(photo.blob)}catch(e){reading={fields:{},confidence:0,warnings:[`No se pudo leer automáticamente (${String(e)}). Revisa el ticket y completa los datos antes de confirmar.`]}}
+   setTicketDraft({tripId:trip.id,type,photo,reading});if(Platform.OS==='web')setTicketPreview(URL.createObjectURL(photo.blob));setGross(reading.fields.gross?.toString()??'');setTare(reading.fields.tare?.toString()??'');setTicketNumber(reading.fields.folio??'');setPrintedNetInput(reading.fields.printedNet?.toString()??'');
+  }catch(e){showError(String(e))}finally{setTicketReadingBusy(false)}
+ };
  const addWeighing=(trip:Trip)=>action(async()=>{
-  if(!supabase||!session||!organizationId)throw Error('Sesión inválida');const g=decimal(gross,'Peso bruto',0.01,200000),t=decimal(tare,'Tara',0,200000);
-  if(!['ASSIGNED','AT_FIELD','LOADING','ARRIVED'].includes(trip.status))throw Error('El pesaje se registra en origen antes de salir o al llegar a destino');
-  if(g<=t)throw Error('El peso bruto debe superar la tara');const weighingType=trip.status==='ARRIVED'?'DESTINATION':'ORIGIN';if(weighings.some(w=>w.trip_id===trip.id&&w.weighing_type===weighingType))throw Error(`Ya existe el pesaje de ${weighingType==='ORIGIN'?'origen':'destino'}`);
-  const ticket=requiredText(ticketNumber,'Folio de báscula',80);const photo=await captureEvidence('weighing',organizationId,trip.id,session.user.id,{gross:g,tare:t,ticketNumber:ticket,weighingType});if(!photo)return;
-  if(photo.queued){setPendingCount((await pendingEvidence()).length);setGross('');setTare('');setTicketNumber('');showError('Ticket y medición pendientes en este dispositivo. Sincronízalos antes de continuar el viaje.');return}
-  const {error}=await supabase.from('weighings').insert({trip_id:trip.id,weighing_type:weighingType,gross_weight_kg:g,tare_weight_kg:t,net_weight_kg:g-t,ticket_number:ticket,storage_bucket:photo.bucket,ticket_storage_path:photo.path,recorded_by:session.user.id,legibility_confirmed:photo.legibilityConfirmed,captured_at:photo.capturedAt,latitude:photo.latitude,longitude:photo.longitude});check(error);setGross('');setTare('');setTicketNumber('');
+  if(!supabase||!session||!organizationId||!ticketDraft||ticketDraft.tripId!==trip.id)throw Error('Primero fotografía y revisa este ticket');
+  const weighingType=trip.status==='ARRIVED'?'DESTINATION':'ORIGIN';if(ticketDraft.type!==weighingType||!['LOADING','ARRIVED'].includes(trip.status))throw Error('El estado del viaje cambió; vuelve a fotografiar');
+  if(weighings.some(w=>w.trip_id===trip.id&&w.weighing_type===weighingType))throw Error('Ya existe el pesaje de esta etapa');
+  const g=decimal(gross,'Peso bruto',0.01,200000),t=decimal(tare,'Tara',0,200000);if(g<=t)throw Error('El bruto debe superar la tara');
+  const ticket=requiredText(ticketNumber,'Folio de báscula',80);
+  const printed=printedNetInput.trim()?decimal(printedNetInput,'Neto impreso',0.01,200000):undefined;
+  if(printed!==undefined&&Math.abs(g-t-printed)>Math.max(2,(g-t)*.001))throw Error(`Neto impreso ${printed} kg ≠ neto calculado ${g-t} kg. Vuelve a fotografiar o corrige bruto y tara; no se confirmará hasta resolver la discrepancia.`);
+  const digest=await crypto.subtle.digest('SHA-256',ticketDraft.photo.bytes);const ticketSha256=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+  const {data:duplicate,error:duplicateError}=await supabase.from('weighings').select('id').eq('ticket_sha256',ticketSha256).limit(1);check(duplicateError);if(duplicate?.length)throw Error('Esta misma fotografía de ticket ya fue registrada');
+  const original=ticketDraft.reading.fields;const correctedFields=[original.gross!==g?'gross':null,original.tare!==t?'tare':null,original.folio!==ticket?'folio':null,original.printedNet!==printed?'printedNet':null].filter((x):x is string=>!!x);
+  const ocrReading={engine:'tesseract.js',confidence:ticketDraft.reading.confidence,detected:{gross:original.gross??null,tare:original.tare??null,printedNet:original.printedNet??null,folio:original.folio??null,date:original.date??null,time:original.time??null}};
+  const photo=await saveConfirmedTicket(ticketDraft.photo,organizationId,trip.id,session.user.id,{gross:g,tare:t,ticketNumber:ticket,weighingType,ocrReading,correctedFields,ticketSha256});
+  if(photo.queued){setPendingCount((await pendingEvidence()).length);setTicketDraft(null);showError('Pesaje confirmado localmente y pendiente de sincronizar. No borres datos ni avances el viaje hasta sincronizar.');return}
+  const {error}=await supabase.from('weighings').insert({trip_id:trip.id,weighing_type:weighingType,gross_weight_kg:g,tare_weight_kg:t,net_weight_kg:g-t,ticket_number:ticket,storage_bucket:photo.bucket,ticket_storage_path:photo.path,recorded_by:session.user.id,legibility_confirmed:true,captured_at:photo.capturedAt,latitude:photo.latitude,longitude:photo.longitude,ocr_reading:ocrReading,ocr_corrected_fields:correctedFields,ticket_sha256:ticketSha256,confirmed_at:new Date().toISOString()});check(error);setTicketDraft(null);setGross('');setTare('');setTicketNumber('');
  });
  const recordVariance=(trip:Trip)=>action(async()=>{if(!supabase||!reviewReady)throw Error('Falta activar el control de conciliación en Supabase');const reason=requiredText(varianceReason,'Explicación de la diferencia',1000);if(reason.length<10)throw Error('Describe la diferencia con al menos 10 caracteres');const {error}=await supabase.rpc('record_trip_variance_review',{p_trip_id:trip.id,p_reason:reason});check(error);setVarianceReason('')});
  const recordCorrection=(trip:Trip)=>action(async()=>{if(!supabase||!reviewReady)throw Error('Falta activar el registro de correcciones en Supabase');const field=requiredText(correctionField,'Campo a corregir',80),value=requiredText(correctionValue,'Valor corregido',300),reason=requiredText(correctionReason,'Motivo',1000);if(reason.length<10)throw Error('Describe el motivo con al menos 10 caracteres');const {error}=await supabase.rpc('record_trip_correction',{p_trip_id:trip.id,p_field_name:field,p_corrected_value:value,p_reason:reason});check(error);setCorrectionField('');setCorrectionValue('');setCorrectionReason('')});
@@ -417,9 +441,15 @@ export default function RealApp(){
     <Text>Placa: {t.vehicle_plate??'Sin registrar'} · Pesajes: {weighings.filter(w=>w.trip_id===t.id).length}</Text><Text>Lotes cargados ({recordedFieldWeight(tripLots.filter(l=>l.trip_id===t.id))??'sin peso registrado'} kg) − origen: {tripReview(t).comparison.originDifference??'—'} kg · Origen − destino: {tripReview(t).comparison.transitDifference??'—'} kg</Text>{tripReview(t).comparison.exceeded&&<Text style={tripReview(t).hasExplanation?styles.muted:styles.error}>{tripReview(t).comparison.exceededStages.map(stage=>`${stage.label}: ${stage.difference} kg`).join('; ')} supera la tolerancia de {tripReview(t).comparison.threshold.toFixed(2)} kg. {tripReview(t).hasExplanation?'Diferencia justificada.':'Registra explicación antes de cerrar.'}</Text>}{varianceNotes.filter(n=>n.trip_id===t.id).map((n,i)=><Text key={i}>Explicación: {n.reason}</Text>)}
     {weighings.filter(w=>w.trip_id===t.id).map(w=><View key={w.id}><Text>{w.weighing_type}: bruto {w.gross_weight_kg} − tara {w.tare_weight_kg} = neto {w.net_weight_kg} kg</Text>{w.ticket_storage_path&&<Button label="Ver ticket" onPress={()=>openPhoto('weighing-tickets',w.ticket_storage_path!)}/>}</View>)}
     {(profile?.role==='ADMIN'||profile?.role==='DRIVER'&&t.driver_id===session.user.id)&&<>
-     {['ASSIGNED','AT_FIELD','LOADING','ARRIVED'].includes(t.status)&&(!t.harvest_order_id||!['ASSIGNED'].includes(t.status))&&!weighings.some(w=>w.trip_id===t.id&&w.weighing_type===(t.status==='ARRIVED'?'DESTINATION':'ORIGIN'))&&<>
-     <Input label="Peso bruto (kg)" value={gross} onChange={setGross}/><Input label="Tara (kg)" value={tare} onChange={setTare}/><Input label="Folio de báscula" value={ticketNumber} onChange={setTicketNumber}/>
-     <Button label="Fotografiar ticket legible y guardar pesaje" onPress={()=>addWeighing(t)} disabled={busy}/>
+     {['LOADING','ARRIVED'].includes(t.status)&&!weighings.some(w=>w.trip_id===t.id&&w.weighing_type===(t.status==='ARRIVED'?'DESTINATION':'ORIGIN'))&&<>
+     <Text style={styles.heading}>Ticket {t.status==='ARRIVED'?'DESTINATION':'ORIGIN'}</Text>
+     <Button label={ticketReadingBusy?'Leyendo ticket…':'Fotografiar ticket de báscula'} onPress={()=>void startTicket(t)} disabled={busy||ticketReadingBusy}/>
+     {ticketDraft?.tripId===t.id&&<><Text style={styles.muted}>Ticket detectado · confianza OCR {Math.round(ticketDraft.reading.confidence)}%. Revisa la fotografía antes de confirmar.</Text>{ticketPreview&&<Image source={{uri:ticketPreview}} style={{width:'100%',height:250,resizeMode:'contain'}}/>}
+     {ticketDraft.reading.warnings.map((warning,i)=><Text key={i} style={styles.error}>{warning}</Text>)}
+     {ticketDraft.reading.fields.date&&<Text>Fecha impresa: {ticketDraft.reading.fields.date} · Hora: {ticketDraft.reading.fields.time??'no detectada'}</Text>}
+     <Input label="Folio detectado / corregir" value={ticketNumber} onChange={setTicketNumber}/><Input label="Peso bruto detectado / corregir (kg)" value={gross} onChange={setGross}/><Input label="Tara detectada / corregir (kg)" value={tare} onChange={setTare}/><Input label="Neto impreso (opcional, corregir lectura)" value={printedNetInput} onChange={setPrintedNetInput}/>
+     <Text>Peso neto calculado: {Number(gross)>Number(tare)&&tare.trim()!==''?(Number(gross)-Number(tare)).toLocaleString('es-MX'):'—'} kg</Text>
+     <Button label="Confirmar pesaje" onPress={()=>addWeighing(t)} disabled={busy}/><Button label="Volver a fotografiar" onPress={()=>void startTicket(t)} disabled={busy||ticketReadingBusy}/></>}
      </>}
      {tripReview(t).comparison.exceeded&&reviewReady&&!tripReview(t).hasExplanation&&<><Input label="Explicación de la diferencia (mínimo 10 caracteres)" value={varianceReason} onChange={setVarianceReason}/><Button label="Registrar explicación" onPress={()=>recordVariance(t)} disabled={busy}/></>}{profile?.role==='ADMIN'&&reviewReady&&<><Input label="Dato que requiere corrección" value={correctionField} onChange={setCorrectionField}/><Input label="Valor correcto documentado" value={correctionValue} onChange={setCorrectionValue}/><Input label="Motivo de la corrección" value={correctionReason} onChange={setCorrectionReason}/><Button label="Anotar corrección sin borrar original" onPress={()=>recordCorrection(t)} disabled={busy}/></>}{t.status==='LOADING'&&departureMissing(t).length>0&&<Text style={styles.muted}>Antes de salir: {departureMissing(t).join(', ')}.</Text>}{(['AT_FIELD','IN_TRANSIT'].includes(t.status)||t.status==='LOADING'&&departureMissing(t).length===0||t.status==='ASSIGNED'&&!t.harvest_order_id)&&<Button label={t.status==='ASSIGNED'||t.status==='AT_FIELD'?'Iniciar carga':t.status==='LOADING'?'Salir a ruta':'Registrar llegada'} onPress={()=>confirm('Avanzar viaje',`El viaje avanzará de ${t.status} al siguiente estado.`,()=>void advanceTrip(t))} disabled={busy}/>} 
      {t.status==='ARRIVED'&&<><Text style={styles.muted}>El ticket legible de báscula DESTINATION es la evidencia final. El viaje no se cierra automáticamente al guardarlo.</Text>{!deliveries.some(d=>d.trip_id===t.id&&d.status==='PENDING')&&<Text style={styles.error}>Falta la entrega pendiente vinculada; solicita revisión administrativa.</Text>}{weighings.some(w=>w.trip_id===t.id&&w.weighing_type==='DESTINATION')&&<Button label="Finalizar entrega" onPress={()=>confirm('Finalizar entrega',`¿Confirmas el cierre de ${t.plantation_folio??t.trace_code} con el ticket de destino? El viaje pasará a DELIVERED.`,()=>void finishDelivery(t))} disabled={busy||!isOnline||!reviewReady||!deliveries.some(d=>d.trip_id===t.id&&d.status==='PENDING')||tripReview(t).missing.some(x=>String(x).startsWith('ticket ')||String(x).startsWith('pesaje '))||tripReview(t).comparison.exceeded&&!tripReview(t).hasExplanation}/>}</>}
