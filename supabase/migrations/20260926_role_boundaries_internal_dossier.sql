@@ -62,4 +62,8 @@ drop policy if exists farm_polygons_select on public.farm_polygons;
 create policy farm_polygons_select on public.farm_polygons for select to authenticated
  using (exists(select 1 from public.farms f where f.id=farm_id and public.is_admin_of_org(f.organization_id)));
 
+drop policy if exists variance_settings_read on public.organization_variance_settings;
+create policy variance_settings_read on public.organization_variance_settings for select to authenticated
+ using (public.is_admin_of_org(organization_id) or public.is_driver_of_org(organization_id));
+
 commit;
