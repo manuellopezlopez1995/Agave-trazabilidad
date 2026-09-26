@@ -35,8 +35,9 @@ function weightCandidates(text:string,label:'bruto'|'tara'|'neto'):Candidate[]{
 function folioCandidates(text:string):{value:string;quality:number}[]{
  const output:{value:string;quality:number}[]=[];
  for(const line of text.split(/\r?\n/)){
-  const found=line.match(/\b(?:[i1l]d[r#]?|folio|ticket|boleta|n[úu]mero\s+de\s+(?:ticket|boleta))\b\s*(?:n[úu]m(?:ero)?\.?)?\s*[:#=.-]*\s*([A-Z0-9][A-Z0-9-]{1,39})/i);
-  if(found&&/\d/.test(found[1]))output.push({value:found[1],quality:90});
+  // ID# may be recognized as 1D, IDR or ID#. Require a nearby numeric value.
+  const found=line.match(/\b(?:[i1l]d[r#]?|folio|ticket|boleta|n(?:o|º|°|úm(?:ero)?)\.?|n[úu]mero\s+de\s+(?:ticket|boleta))\s*[:#=.-]*\s*([A-Z0-9][A-Z0-9-]{1,38}[A-Z0-9])(?![A-Z0-9-])/i);
+  if(found&&/\d/.test(found[1])&&!/\b(?:tel|teléfono|phone)\b/i.test(line.slice(0,found.index)))output.push({value:found[1],quality:90});
  }
  return output;
 }
@@ -61,9 +62,12 @@ export function parseTicketPasses(passes:Pass[]):TicketReading{
  }
  const ranked=(values:Candidate[])=>[...new Set(values.map(x=>x.value))].map(value=>({value,quality:Math.max(...values.filter(x=>x.value===value).map(x=>x.quality)),votes:values.filter(x=>x.value===value).length})).sort((a,b)=>(b.votes*20+b.quality)-(a.votes*20+a.quality));
  const gross=ranked(candidates.gross),tare=ranked(candidates.tare),printed=ranked(candidates.printedNet);
- const consistent=printed.flatMap(n=>gross.flatMap(g=>tare.filter(t=>g.value>t.value&&Math.abs(g.value-t.value-n.value)<=2).map(t=>({g,t,n,score:g.votes+t.votes+n.votes})))).sort((a,b)=>b.score-a.score)[0];
+ const consistent=printed.flatMap(n=>gross.flatMap(g=>tare.filter(t=>g.value>t.value&&Math.abs(g.value-t.value-n.value)<=2).map(t=>({g,t,n,score:g.votes+t.votes+n.votes+(Math.abs(g.value-t.value-n.value)<.01?2:0)})))).sort((a,b)=>b.score-a.score)[0];
  const selectedG=consistent?.g??gross[0],selectedT=consistent?.t??tare[0],selectedN=consistent?.n??printed[0];
- if(selectedG){fields.gross=selectedG.value;fieldConfidence.gross=Math.min(99,selectedG.quality+(consistent?8:0))}
+ // Never derive a gross value from tare + net alone. If the OCR candidates
+ // disagree with a clearly printed tare and net, leave gross for review.
+ const conflictingGross=selectedG&&selectedT&&selectedN&&!consistent&&Math.abs(selectedG.value-selectedT.value-selectedN.value)>2;
+ if(selectedG&&!conflictingGross){fields.gross=selectedG.value;fieldConfidence.gross=Math.min(99,selectedG.quality+(consistent?8:0))}
  if(selectedT){fields.tare=selectedT.value;fieldConfidence.tare=Math.min(99,selectedT.quality+(consistent?8:0))}
  if(selectedN){fields.printedNet=selectedN.value;fieldConfidence.printedNet=Math.min(99,selectedN.quality+(consistent?8:0))}
  const folio=mostLikely(candidates.folio);if(folio){fields.folio=folio.value;fieldConfidence.folio=folio.quality}
@@ -120,7 +124,7 @@ export async function readTicket(blob:Blob):Promise<TicketReading>{
     if(reading.fields.folio&&reading.fields.gross!==undefined&&reading.fields.tare!==undefined&&!reading.warnings.some(x=>x.includes('neto impreso')))break;
    }
   }
-  console.debug('Diagnóstico OCR de ticket',passes.map(x=>({text:x.text,confidence:x.confidence})),{fields:reading.fields,fieldConfidence:reading.fieldConfidence,warnings:reading.warnings});
+  console.debug('Diagnóstico OCR de ticket',passes.map(x=>({text:x.text,confidence:x.confidence,gross:weightCandidates(x.text,'bruto'),tare:weightCandidates(x.text,'tara'),net:weightCandidates(x.text,'neto'),folio:folioCandidates(x.text)})),{fields:reading.fields,fieldConfidence:reading.fieldConfidence,warnings:reading.warnings});
   return reading;
  }finally{if(worker)await worker.terminate()}
 }
