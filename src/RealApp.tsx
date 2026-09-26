@@ -288,7 +288,7 @@ export default function RealApp(){
   try{const photo=await photographed;if(!photo)return;
    const type=trip.status==='ARRIVED'?'DESTINATION':'ORIGIN';if(!['LOADING','ARRIVED'].includes(trip.status))throw Error('Fotografía el ticket de origen en carga o el de destino después de llegar');
    let reading:TicketReading;
-   try{reading=await readTicket(photo.blob)}catch(e){reading={fields:{},confidence:0,warnings:[`No se pudo leer automáticamente (${String(e)}). Revisa el ticket y completa los datos antes de confirmar.`]}}
+   try{reading=await readTicket(photo.blob)}catch(e){console.error('Error al analizar el ticket de báscula',e);reading={fields:{},confidence:0,warnings:['No pudimos leer automáticamente el ticket. Intenta tomar otra fotografía o captura los datos manualmente.']}}
    setTicketDraft({tripId:trip.id,type,photo,reading});if(Platform.OS==='web')setTicketPreview(URL.createObjectURL(photo.blob));setGross(reading.fields.gross?.toString()??'');setTare(reading.fields.tare?.toString()??'');setTicketNumber(reading.fields.folio??'');setPrintedNetInput(reading.fields.printedNet?.toString()??'');
   }catch(e){showError(String(e))}finally{setTicketReadingBusy(false)}
  };
