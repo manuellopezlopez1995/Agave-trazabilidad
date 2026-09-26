@@ -95,7 +95,7 @@ function candidateDiagnostics(pass:Pass){
 }
 
 // Only the recognition copies are modified; the original camera photograph stays intact.
-async function recognitionCopies(blob:Blob):Promise<Blob[]>{
+async function recognitionCopies(blob:Blob,detectedLines:OcrLine[]=[]):Promise<Blob[]>{
  if(typeof document==='undefined')return [];
  // HTMLImageElement works on iOS Safari even where createImageBitmap is absent or unreliable.
  const url=URL.createObjectURL(blob);
@@ -107,6 +107,13 @@ async function recognitionCopies(blob:Blob):Promise<Blob[]>{
  // Narrow center crops give thermal-print numerals enough pixels for Tesseract.
  // Broad crops remain independent, so a bad crop cannot erase a prior candidate.
  const areas=[{x:.1,y:.1,w:.8,h:.8},{x:.15,y:.03,w:.7,h:.55},{x:.23,y:.12,w:.54,h:.38},{x:.22,y:.34,w:.56,h:.44}];
+ const anchor=detectedLines.find(line=>/\b(?:[i1l]d[r#]?|folio|ticket|n[°o]\.?)\s*[:#=.-]*\s*\d{2,}/i.test(line.text)&&line.bbox)??detectedLines.find(line=>/\b\d{1,2}:\d\d\b.*\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/.test(line.text)&&line.bbox);
+ if(anchor){
+  const box=anchor.bbox as {x0:number;y0:number;x1:number;y1:number};
+  const h=Math.max(10,box.y1-box.y0),w=Math.min(imageWidth*.75,Math.max(imageWidth*.3,h*22));
+  const x=Math.max(0,Math.min(imageWidth-w,(box.x0+box.x1-w)/2)),y=Math.max(0,box.y0-h*2);
+  areas.unshift({x:x/imageWidth,y:y/imageHeight,w:w/imageWidth,h:Math.min(imageHeight-y,h*15)/imageHeight});
+ }
   const output:Blob[]=[];
   for(const area of areas){
    const width=Math.round(Math.min(2200,Math.max(1400,imageWidth*area.w*2)));
@@ -129,7 +136,7 @@ export async function readTicket(blob:Blob):Promise<TicketReading>{
   const first=await worker.recognize(blob,{}, {text:true,blocks:true});passes.push({text:first.data.text,confidence:first.data.confidence,lines:linesFromBlocks(first.data.blocks),name:'original'});
   let reading=parseTicketPasses(passes);
   if(!reading.fields.folio||reading.fields.gross===undefined||reading.fields.tare===undefined||reading.fields.printedNet===undefined||reading.warnings.some(x=>x.includes('neto impreso'))){
-   for(const [index,copy] of (await recognitionCopies(blob)).entries()){
+   for(const [index,copy] of (await recognitionCopies(blob,passes[0].lines)).entries()){
     if(Date.now()>deadline)break;
     const result=await worker.recognize(copy,{}, {text:true,blocks:true});passes.push({text:result.data.text,confidence:result.data.confidence,lines:linesFromBlocks(result.data.blocks),name:`recorte ${index+1}`});
     reading=parseTicketPasses(passes);
