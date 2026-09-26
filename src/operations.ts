@@ -32,5 +32,15 @@ export function variance(fieldKg:number|null,originKg:number|null,destinationKg:
  const originDifference=fieldKg!=null&&originKg!=null?fieldKg-originKg:null;
  const transitDifference=originKg!=null&&destinationKg!=null?originKg-destinationKg:null;
  const receiptDifference=destinationKg!=null&&acceptedKg!=null&&rejectedKg!=null?destinationKg-acceptedKg-rejectedKg:null;
- return {threshold,originDifference,transitDifference,receiptDifference,exceeded:[originDifference,transitDifference,receiptDifference].some(v=>v!==null&&Math.abs(v)>threshold)};
+ const exceededStages=[
+  {label:'Lotes cargados − origen',difference:originDifference},
+  {label:'Origen − destino',difference:transitDifference},
+  {label:'Destino − recepción',difference:receiptDifference}
+ ].filter(stage=>stage.difference!==null&&Math.abs(stage.difference)>threshold);
+ return {threshold,originDifference,transitDifference,receiptDifference,exceededStages,exceeded:exceededStages.length>0};
+}
+// Un vínculo sin peso no equivale a un lote de 0 kg: omitir la comparación hasta documentarlo.
+export function recordedFieldWeight(links:Array<{loaded_weight_kg:number|null}>):number|null{
+ return links.length&&links.every(link=>link.loaded_weight_kg!=null&&Number.isFinite(Number(link.loaded_weight_kg)))
+  ?links.reduce((total,link)=>total+Number(link.loaded_weight_kg),0):null;
 }

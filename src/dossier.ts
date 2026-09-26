@@ -1,6 +1,6 @@
 // El expediente se construye en el dispositivo del administrador: las fotos privadas
 // se descargan con su sesión y nunca se publican como enlaces permanentes.
-import {variance} from './operations';
+import {variance,recordedFieldWeight} from './operations';
 import {weightSummary} from './weightSummary';
 export type DossierImage={kind:string;label:string;mime:string;base64:string;fileName:string;capturedAt?:string|null;uploadedBy?:string|null;latitude?:number|null;longitude?:number|null;legibilityConfirmed?:boolean};
 export type DossierData={harvest:any;farm:any;crew:any;lots:any[];trips:any[];links:any[];weighings:any[];deliveries:any[];drivers:any[];images:DossierImage[];generatedAt:string;organizationId:string;buyerName:string;varianceLimitKg?:number;varianceLimitPercent?:number;varianceNotes?:any[];corrections?:any[]};
@@ -22,12 +22,12 @@ export function dossierGaps(data:DossierData){
    if(!ws.some(w=>w.weighing_type==='DESTINATION'))gaps.push(`Falta pesaje de destino en ${trip.trace_code}.`);
    if(ws.some(w=>!w.ticket_storage_path||!w.legibility_confirmed))gaps.push(`Hay un ticket sin fotografía legible confirmada en ${trip.trace_code}.`);
    if(!ds.length||ds.some(d=>d.status!=='COMPLETED'))gaps.push(`Falta cerrar la entrega de ${trip.trace_code}.`);
-   const loaded=data.links.filter(x=>x.trip_id===trip.id).reduce((a,x)=>a+Number(x.loaded_weight_kg||0),0);
+   const loaded=recordedFieldWeight(data.links.filter(x=>x.trip_id===trip.id));
    const o=ws.find(w=>w.weighing_type==='ORIGIN'),dest=ws.find(w=>w.weighing_type==='DESTINATION');
    const accepted=ds.every(d=>d.accepted_weight_kg!=null)?ds.reduce((a,d)=>a+Number(d.accepted_weight_kg),0):null;
    const rejected=ds.every(d=>d.rejected_weight_kg!=null)?ds.reduce((a,d)=>a+Number(d.rejected_weight_kg),0):null;
-   const v=variance(loaded||null,o?.net_weight_kg??null,dest?.net_weight_kg??null,accepted,rejected,data.varianceLimitKg,data.varianceLimitPercent);
-   if(v.exceeded&&!data.varianceNotes?.some(n=>n.trip_id===trip.id&&n.reason?.trim()))gaps.push(`La diferencia de peso de ${trip.trace_code} supera la tolerancia y no tiene explicación registrada.`);
+   const v=variance(loaded,o?.net_weight_kg??null,dest?.net_weight_kg??null,accepted,rejected,data.varianceLimitKg,data.varianceLimitPercent);
+   if(v.exceeded&&!data.varianceNotes?.some(n=>n.trip_id===trip.id&&n.reason?.trim()))gaps.push(`${v.exceededStages.map(stage=>stage.label).join(', ')} en ${trip.trace_code} supera la tolerancia y no tiene explicación registrada.`);
    for(const d of ds)if(!data.images.some(i=>i.kind==='delivery'&&i.label===`Entrega ${d.trace_code}`&&i.legibilityConfirmed))gaps.push(`Falta foto legible confirmada del recibo de ${d.trace_code}.`);
   }
  }
