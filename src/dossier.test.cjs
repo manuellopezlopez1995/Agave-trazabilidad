@@ -12,10 +12,19 @@ const {html,gaps,complete}=buildDossier(data);
 assert.equal(complete,true,JSON.stringify(gaps));
 assert.doesNotMatch(html,new RegExp(uuid,'i'));
 assert.doesNotMatch(html,/\.jpg<\/figcaption>|Usuario:|Organización \(ID\)/);
-for(const expected of ['Agave Trazabilidad','345678-1','AGV-2026-000052','30,400 kg','JUSTIFICADA','Ticket de báscula de destino / Evidencia de entrega','Entrega acreditada con ticket de destino'])assert.ok(html.includes(expected),expected);
+for(const expected of ['Agave Trazabilidad','345678-1','AGV-2026-000052','30,400 kg','Ticket de báscula de destino / Evidencia de entrega','Entrega acreditada con ticket de destino'])assert.ok(html.includes(expected),expected);
 for(const hidden of ['20,430 kg','30,430 kg','Ticket de báscula – ORIGIN','1234'])assert.ok(!html.includes(hidden),hidden);
 assert.equal((html.match(/<figure>/g)||[]).length,2);
 const missing=buildDossier({...data,links:[{trip_id:uuid,agave_lot_id:uuid,loaded_weight_kg:null}]});
 assert.ok(!missing.html.includes('Ticket de báscula – ORIGIN'));
 assert.ok(!missing.html.includes('Diferencia fuera de tolerancia:'));
 console.log('Expediente: cifras, pruebas de privacidad, fotos y valores ausentes correctos');
+
+for(const notes of [data.varianceNotes,[]]){
+ const output=buildDossier({...data,varianceNotes:notes}).html;
+ assert.doesNotMatch(output,/ORIGIN|conciliaci[oó]n|JUSTIFICADA|justifica|confundió/i);
+}
+const {buildTripReportLines}=require('./tripReport.ts');
+const internal=buildTripReportLines({folio:'test',internalCode:'internal',status:'DELIVERED',buyer:'buyer',driver:'driver',plate:'plate',departedAt:null,arrivedAt:null,deliveredAt:null,crewNames:{},lots:[],harvests:[],deliveries:[],weighings:[{weighing_type:'ORIGIN',net_weight_kg:22640,gross_weight_kg:35520,tare_weight_kg:12880,ticket_number:'2231'},{weighing_type:'DESTINATION',net_weight_kg:26580,gross_weight_kg:41260,tare_weight_kg:14680,ticket_number:'7781'}],corrections:[],generatedAt:'test',photoCount:0,varianceNotes:[{reason:'Texto exacto: prueba & <sin cambiar>',created_at:'2026-09-28T05:43:00Z',created_by:'author-id',author_name:'Autor de prueba'}]}).join('\n');
+for(const text of ['-3,940 kg','Texto exacto: prueba & <sin cambiar>','Autor de prueba','27/9/2026','America/Mexico_City'])assert.ok(internal.includes(text),text);
+console.log('Conciliacion exclusivamente interna: pruebas correctas');
