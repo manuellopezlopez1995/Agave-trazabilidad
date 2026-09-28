@@ -1,5 +1,14 @@
 import {supabase} from './backend';
 import {pendingEvidence,syncEvidence,PendingEvidence} from './offlineEvidence';
+export function offlineErrorMessage(error:unknown){
+ if(error instanceof Error)return error.message;
+ if(error&&typeof error==='object'){
+  const detail=error as {message?:unknown;details?:unknown;hint?:unknown;code?:unknown};
+  const parts=[detail.message,detail.details,detail.hint,detail.code].filter(x=>typeof x==='string'&&x.trim());
+  if(parts.length)return parts.join(' · ');
+ }
+ return typeof error==='string'?error:'Error desconocido; los pendientes siguen guardados';
+}
 // Installed PWAs reopen at start_url without query parameters. Remember the
 // chosen workspace per named session; this preference grants no access.
 export const practiceMode=(()=>{if(typeof window==='undefined')return false;const params=new URLSearchParams(window.location.search),explicit=params.get('practice'),key=`agave-workspace:${params.get('session')??'default'}`;try{if(explicit==='0'||explicit==='1')localStorage.setItem(key,explicit);return (explicit??localStorage.getItem(key))==='1'}catch{return explicit==='1'}})();
@@ -15,7 +24,7 @@ export async function prepareOfflineShell(){
 }
 
 export type OfflineOperation={id:string;actorId:string;organizationId:string;kind:'harvest'|'lot'|'trip'|'field_arrival';entityId:string;capturedAt:string;queuedAt:string;payload:Record<string,unknown>;blob?:Blob;error?:string};
-export type OfflineDraft={id:string;actorId:string;organizationId:string;entityId:string;kind:'ticket'|'brix';type?:'ORIGIN'|'DESTINATION';blob:Blob;mimeType:string;capturedAt:string;latitude?:number;longitude?:number};
+export type OfflineDraft={id:string;actorId:string;organizationId:string;entityId:string;kind:'ticket'|'brix';type?:'ORIGIN'|'DESTINATION';blob?:Blob;bytes?:ArrayBuffer;mimeType:string;capturedAt:string;latitude?:number;longitude?:number};
 type Store='operations'|'snapshots'|'drafts';
 function open():Promise<IDBDatabase>{return new Promise((resolve,reject)=>{const r=indexedDB.open('agave-offline-journal',1);r.onupgradeneeded=()=>{for(const name of ['operations','snapshots','drafts'])r.result.createObjectStore(name,{keyPath:'id'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 async function transaction<T>(name:Store,mode:IDBTransactionMode,run:(store:IDBObjectStore)=>IDBRequest):Promise<T>{
@@ -24,7 +33,13 @@ async function transaction<T>(name:Store,mode:IDBTransactionMode,run:(store:IDBO
 export async function operations(actor:string,org?:string){return (await transaction<OfflineOperation[]>('operations','readonly',s=>s.getAll())).filter(x=>x.actorId===actor&&(!org||x.organizationId===org)).sort((a,b)=>a.queuedAt.localeCompare(b.queuedAt)||a.id.localeCompare(b.id))}
 export async function enqueueOperation(op:OfflineOperation){await transaction('operations','readwrite',s=>s.add(op))}
 export async function drafts(actor:string,org:string){return (await transaction<OfflineDraft[]>('drafts','readonly',s=>s.getAll())).filter(x=>x.actorId===actor&&x.organizationId===org)}
-export async function saveDraft(draft:OfflineDraft){await transaction('drafts','readwrite',s=>s.put(draft))}
+export async function saveDraft(draft:OfflineDraft){
+ // Safari may retain an IndexedDB Blob reference after its backing object has
+ // disappeared. Store owned image bytes instead, before acknowledging the draft.
+ const bytes=draft.bytes??await draft.blob?.arrayBuffer();
+ if(!bytes?.byteLength)throw Error('No se pudieron conservar los bytes originales de la fotografía');
+ await transaction('drafts','readwrite',s=>s.put({...draft,blob:undefined,bytes:bytes.slice(0)}));
+}
 export async function removeDraft(id:string){await transaction('drafts','readwrite',s=>s.delete(id))}
 const cacheId=(actor:string)=>`${actor}:${practiceMode?'practice':'operations'}`;
 export async function saveOfflineView(actor:string,view:Record<string,any>){await transaction('snapshots','readwrite',s=>s.put({id:cacheId(actor),savedAt:new Date().toISOString(),view}))}
@@ -46,14 +61,14 @@ export async function syncJournal(actor:string,org:string){
   const commands=await operations(actor,org),photos=(await pendingEvidence()).filter(x=>x.userId===actor&&x.organizationId===org);
   const work=[...commands.map(op=>({at:op.queuedAt,id:op.id,op})),...photos.map(photo=>({at:photo.queuedAt??photo.capturedAt,id:photo.id,photo}))].sort((a,b)=>Number('op' in a&&a.op.kind==='trip'&&a.op.payload.expected==='LOADING')-Number('op' in b&&b.op.kind==='trip'&&b.op.payload.expected==='LOADING')||a.at.localeCompare(b.at)||a.id.localeCompare(b.id));
   for(const item of work){
-   if('photo' in item){await syncEvidence(org,actor,undefined,item.id);continue}
+   if('photo' in item){try{await syncEvidence(org,actor,undefined,item.id)}catch(error){throw Error(`Fotografía pendiente conservada (${item.photo.kind}): ${offlineErrorMessage(error)}`)}continue}
    const op=item.op;
    try{
     if(op.kind==='lot'){if(!op.blob)throw Error('Falta la foto original de °Brix');await originalUpload('harvest-evidence',String(op.payload.path),op.blob)}
     const {data,error}=await supabase.rpc('apply_offline_operation',{p_event_id:op.id,p_kind:op.kind,p_entity_id:op.entityId,p_captured_at:op.capturedAt,p_payload:op.payload});
     if(error)throw error;if(!data)throw Error('El servidor no confirmó el evento');
     await transaction('operations','readwrite',s=>s.delete(op.id));
-   }catch(error){op.error=error instanceof Error?error.message:String((error as {message?:string})?.message??error);await transaction('operations','readwrite',s=>s.put(op));throw Error(`Pendiente conservado: ${op.error}`)}
+   }catch(error){op.error=offlineErrorMessage(error);await transaction('operations','readwrite',s=>s.put(op));throw Error(`Pendiente conservado: ${op.error}`)}
   }
  };
  const promise=(async()=>{if(typeof navigator!=='undefined'&&navigator.locks)await navigator.locks.request(`agave-sync:${key}`,run);else await run()})().finally(()=>running.delete(key));running.set(key,promise);return promise;
