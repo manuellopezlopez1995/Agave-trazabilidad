@@ -17,7 +17,7 @@ function kilograms(raw:string):number|undefined{
  const n=Number(normalized);return Number.isFinite(n)&&n>0&&n<=200000?n:undefined;
 }
 function dates(line:string):string[]{return [...line.matchAll(/\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/g)].map(x=>x[0])}
-function times(line:string):string[]{return [...line.matchAll(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?:\s*[AP]\.?M\.?)?\b/gi)].map(x=>x[0].replace(/\s+/g,' ').trim())}
+function times(line:string):string[]{return [...line.matchAll(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?:\s*[AP]\.?M\.?)?\b/gi)].map(x=>x[0].replace(/\s+/g,' ').trim().replace(/\s*([AP])\.?M\.?$/i,(_,period:string)=>` ${period.toUpperCase()}M`))}
 function findCandidates(passes:Pass[]):Record<Key,Candidate[]>{
  const all=Object.fromEntries(keys.map(k=>[k,[]])) as unknown as Record<Key,Candidate[]>;
  for(const [index,pass] of passes.entries()){
