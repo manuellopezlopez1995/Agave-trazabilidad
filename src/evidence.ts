@@ -77,7 +77,7 @@ export async function saveConfirmedTicket(draft:TicketDraft,organizationId:strin
  return result;
 }
 
-export async function captureEvidence(kind:Kind,organizationId:string,entityId:string,userId:string,weighing?:{gross:number;tare:number;ticketNumber:string;weighingType:string}):Promise<EvidenceResult|null>{
+export async function captureEvidence(kind:Kind,organizationId:string,entityId:string,userId:string,weighing?:{gross:number;tare:number;ticketNumber:string;weighingType:string},agaveLotId?:string,agaveLotEvidencePath?:string):Promise<EvidenceResult|null>{
  if(!supabase)throw Error('Falta configurar Supabase');
  if(!uuidPattern.test(organizationId)||!uuidPattern.test(entityId)||!uuidPattern.test(userId))throw Error('La ruta de evidencia no es válida');
  // Web pickers must open synchronously from the user's tap. Browser permissions
@@ -107,7 +107,7 @@ export async function captureEvidence(kind:Kind,organizationId:string,entityId:s
  if(locationPermission.granted){
   try{const p=await Promise.race([Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced}),new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('GPS no disponible')),5000))]);latitude=p.coords.latitude;longitude=p.coords.longitude}catch{/* La foto sigue válida sin GPS. */}
  }
- if(Platform.OS==='web'){await queueEvidence({id:path,kind,organizationId,entityId,userId,bucket,path,mimeType,blob:new Blob([bytes],{type:mimeType}),capturedAt,latitude,longitude,legibilityConfirmed:kind!=='harvest',weighing});return {bucket,path,mimeType,size:bytes.byteLength,latitude,longitude,capturedAt,legibilityConfirmed:kind!=='harvest',queued:true}}
+ if(Platform.OS==='web'){await queueEvidence({id:path,kind,agaveLotId,agaveLotEvidencePath,organizationId,entityId,userId,bucket,path,mimeType,blob:new Blob([bytes],{type:mimeType}),capturedAt,latitude,longitude,legibilityConfirmed:kind!=='harvest',weighing});return {bucket,path,mimeType,size:bytes.byteLength,latitude,longitude,capturedAt,legibilityConfirmed:kind!=='harvest',queued:true}}
  const {error}=await supabase.storage.from(bucket).upload(path,bytes,{contentType:mimeType,upsert:false});
  if(error)throw error;
  return {bucket,path,mimeType,size:bytes.byteLength,latitude,longitude,capturedAt,legibilityConfirmed:kind!=='harvest'};
