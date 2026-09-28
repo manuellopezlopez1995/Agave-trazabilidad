@@ -26,6 +26,6 @@ test('salida real de Google Vision del ticket 2231 conserva la pesada de salida'
   const reading=parseTicketPasses([{text:raw,name:'Google Vision',confidence:93}]);
   assert.deepEqual([reading.fields.folio,reading.fields.date,reading.fields.time,reading.fields.gross,reading.fields.tare,reading.fields.printedNet,reading.netKg],['2231','10/04/25','06:04 PM',35520,12880,22640,22640]);
   assert.match(reading.diagnostics.validation[0],/Pesada seleccionada: PESO DE SALIDA/);
-  assert.match(reading.diagnostics.validation[0],/pesadas detectadas: .*PESO DE ENTRADA/);
+  assert.match(reading.diagnostics.validation[0],/pesadas detectadas: PESO DE SALIDA, PESO DE ENTRADA$/);
  }
 });
