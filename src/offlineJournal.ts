@@ -19,19 +19,29 @@ export async function prepareOfflineShell(){
  const registration=await Promise.race([navigator.serviceWorker.ready,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('La aplicación aún no está lista para abrir sin señal. Vuelve a preparar con conexión.')),20000)})]).finally(()=>clearTimeout(timer!));
  const scripts=Array.from(document.querySelectorAll<HTMLScriptElement>('script[src]')).map(x=>x.src).filter(x=>x.startsWith(registration.scope));
  if(!scripts.length)throw Error('No se encontró la versión de la aplicación para conservar');
- const cache=await caches.open('agave-shell-v2');await cache.addAll([registration.scope,...scripts]);
+ const styles=Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"][href]')).map(x=>x.href).filter(x=>x.startsWith(registration.scope));
+ const assets=[registration.scope,...scripts,...styles,new URL('manifest.json',registration.scope).href,new URL('icon-192.png',registration.scope).href];
+ const cache=await caches.open('agave-shell-v2');await cache.addAll(assets);
+ for(const url of assets){const response=await cache.match(url);if(!response?.ok)throw Error(`Falta un archivo de la aplicación para usarla sin señal: ${url.split('/').pop()}`)}
  if(navigator.storage?.persist)await navigator.storage.persist();
 }
+export async function verifyOfflineShell(){
+ if(!('serviceWorker' in navigator)||typeof caches==='undefined')return false;
+ const registration=await navigator.serviceWorker.getRegistration();if(!registration?.active)return false;
+ const cache=await caches.open('agave-shell-v2');
+ const assets=[registration.scope,...Array.from(document.querySelectorAll<HTMLScriptElement>('script[src]')).map(x=>x.src).filter(x=>x.startsWith(registration.scope)),...Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"][href]')).map(x=>x.href).filter(x=>x.startsWith(registration.scope))];
+ return assets.length>1&&(await Promise.all(assets.map(x=>cache.match(x)))).every(response=>response?.ok);
+}
 
-export type OfflineOperation={id:string;actorId:string;organizationId:string;kind:'harvest'|'lot'|'trip'|'field_arrival';entityId:string;capturedAt:string;queuedAt:string;payload:Record<string,unknown>;blob?:Blob;error?:string};
+export type OfflineOperation={id:string;actorId:string;organizationId:string;kind:'harvest'|'lot'|'trip'|'field_arrival';entityId:string;capturedAt:string;queuedAt:string;payload:Record<string,unknown>;blob?:Blob;bytes?:ArrayBuffer;mimeType?:string;error?:string};
 export type OfflineDraft={id:string;actorId:string;organizationId:string;entityId:string;kind:'ticket'|'brix';type?:'ORIGIN'|'DESTINATION';blob?:Blob;bytes?:ArrayBuffer;mimeType:string;capturedAt:string;latitude?:number;longitude?:number};
 type Store='operations'|'snapshots'|'drafts';
 function open():Promise<IDBDatabase>{return new Promise((resolve,reject)=>{const r=indexedDB.open('agave-offline-journal',1);r.onupgradeneeded=()=>{for(const name of ['operations','snapshots','drafts'])r.result.createObjectStore(name,{keyPath:'id'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 async function transaction<T>(name:Store,mode:IDBTransactionMode,run:(store:IDBObjectStore)=>IDBRequest):Promise<T>{
  const database=await open();return new Promise((resolve,reject)=>{const tx=database.transaction(name,mode);let value:T;const request=run(tx.objectStore(name));request.onsuccess=()=>{value=request.result};tx.oncomplete=()=>{database.close();resolve(value)};tx.onerror=tx.onabort=()=>{database.close();reject(tx.error??request.error??Error('No se pudo guardar en el dispositivo'))}});
 }
-export async function operations(actor:string,org?:string){return (await transaction<OfflineOperation[]>('operations','readonly',s=>s.getAll())).filter(x=>x.actorId===actor&&(!org||x.organizationId===org)).sort((a,b)=>a.queuedAt.localeCompare(b.queuedAt)||a.id.localeCompare(b.id))}
-export async function enqueueOperation(op:OfflineOperation){await transaction('operations','readwrite',s=>s.add(op))}
+export async function operations(actor:string,org?:string){return (await transaction<OfflineOperation[]>('operations','readonly',s=>s.getAll())).filter(x=>x.actorId===actor&&(!org||x.organizationId===org)).map(x=>x.bytes?{...x,blob:new Blob([x.bytes],{type:x.mimeType??'image/jpeg'})}:x).sort((a,b)=>a.queuedAt.localeCompare(b.queuedAt)||a.id.localeCompare(b.id))}
+export async function enqueueOperation(op:OfflineOperation){const bytes=op.bytes??await op.blob?.arrayBuffer();await transaction('operations','readwrite',s=>s.add({...op,blob:undefined,bytes:bytes?.slice(0),mimeType:op.blob?.type??op.mimeType}))}
 export async function drafts(actor:string,org:string){return (await transaction<OfflineDraft[]>('drafts','readonly',s=>s.getAll())).filter(x=>x.actorId===actor&&x.organizationId===org)}
 export async function saveDraft(draft:OfflineDraft){
  // Safari may retain an IndexedDB Blob reference after its backing object has
@@ -88,6 +98,6 @@ export function projectOfflineView(view:Record<string,any>,ops:OfflineOperation[
    v.harvestPhotos.push({id:op.id,harvest_order_id:op.entityId,agave_lot_id:id,storage_bucket:'harvest-evidence',storage_path:op.payload.path,pending:true});
   }else{const t=v.trips.find((t:any)=>t.id===op.entityId);if(t){t.status=op.kind==='field_arrival'?'AT_FIELD':'LOADING';t.pending=true}}
  }
- for(const p of photos){if(p.kind==='harvest'&&!v.harvestPhotos.some((x:any)=>x.storage_path===p.path))v.harvestPhotos.push({id:p.id,harvest_order_id:p.entityId,storage_bucket:p.bucket,storage_path:p.path,pending:true})}
+ for(const p of photos){if(p.kind==='harvest'&&!v.harvestPhotos.some((x:any)=>x.storage_path===p.path))v.harvestPhotos.push({id:p.id,harvest_order_id:p.entityId,agave_lot_id:p.agaveLotId??null,storage_bucket:p.bucket,storage_path:p.path,pending:true})}
  return v;
 }
