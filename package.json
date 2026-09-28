@@ -20,6 +20,7 @@
     "expo-image-picker": "~17.0.8",
     "expo-location": "~19.0.7",
     "expo-status-bar": "~3.0.9",
+    "leaflet": "^1.9.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
@@ -28,6 +29,7 @@
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@types/leaflet": "^1.9.21",
     "@types/react": "~19.1.10",
     "fake-indexeddb": "^6.2.5",
     "typescript": "~5.9.2"
