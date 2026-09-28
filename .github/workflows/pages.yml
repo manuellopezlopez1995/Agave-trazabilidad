@@ -40,6 +40,7 @@ jobs:
           for path in ('manifest.json', 'icon-192.png', 'favicon.ico'):
               content = content.replace(f'="/{path}"', f'="/Agave-trazabilidad/{path}"')
           content = content.replace('src="/_expo/', 'src="/Agave-trazabilidad/_expo/')
+          content = content.replace('href="/_expo/', 'href="/Agave-trazabilidad/_expo/')
           html.write_text(content)
           manifest = root.joinpath('manifest.json')
           data = json.loads(manifest.read_text())
