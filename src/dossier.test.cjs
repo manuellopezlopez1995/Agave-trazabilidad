@@ -13,6 +13,7 @@ assert.equal(complete,true,JSON.stringify(gaps));
 assert.doesNotMatch(html,new RegExp(uuid,'i'));
 assert.doesNotMatch(html,/\.jpg<\/figcaption>|Usuario:|Organización \(ID\)/);
 for(const expected of ['Agave Trazabilidad','345678-1','AGV-2026-000052','30,400 kg','Ticket de báscula de destino / Evidencia de entrega','Entrega acreditada con ticket de destino'])assert.ok(html.includes(expected),expected);
+assert.doesNotMatch(html,/Los agaves provienen de los lotes vinculados|el conteo del lote no representa agaves exclusivos/i);
 for(const hidden of ['20,430 kg','30,430 kg','Ticket de báscula – ORIGIN','1234'])assert.ok(!html.includes(hidden),hidden);
 assert.equal((html.match(/<figure>/g)||[]).length,2);
 const missing=buildDossier({...data,links:[{trip_id:uuid,agave_lot_id:uuid,loaded_weight_kg:null}]});
