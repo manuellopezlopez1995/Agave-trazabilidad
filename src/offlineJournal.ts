@@ -31,7 +31,7 @@ export async function syncJournal(actor:string,org:string){
  const run=async()=>{
   if(!supabase||!navigator.onLine)throw Error('Sin conexión. Los pendientes siguen guardados.');
   const commands=await operations(actor,org),photos=(await pendingEvidence()).filter(x=>x.userId===actor&&x.organizationId===org);
-  const work=[...commands.map(op=>({at:op.queuedAt,id:op.id,op})),...photos.map(photo=>({at:photo.queuedAt??photo.capturedAt,id:photo.id,photo}))].sort((a,b)=>a.at.localeCompare(b.at)||a.id.localeCompare(b.id));
+  const work=[...commands.map(op=>({at:op.queuedAt,id:op.id,op})),...photos.map(photo=>({at:photo.queuedAt??photo.capturedAt,id:photo.id,photo}))].sort((a,b)=>Number('op' in a&&a.op.kind==='trip'&&a.op.payload.expected==='LOADING')-Number('op' in b&&b.op.kind==='trip'&&b.op.payload.expected==='LOADING')||a.at.localeCompare(b.at)||a.id.localeCompare(b.id));
   for(const item of work){
    if('photo' in item){await syncEvidence(org,actor,undefined,item.id);continue}
    const op=item.op;
@@ -58,7 +58,7 @@ export function projectOfflineView(view:Record<string,any>,ops:OfflineOperation[
    const l={id,trace_code:existing?.trace_code??'LOTE PENDIENTE',harvest_order_id:op.entityId,farm_id:h?.farm_id,status:'OPEN',agave_count:op.payload.count,average_brix:op.payload.brix,actual_weight_kg:null,pending:true};
    if(existing)Object.assign(existing,l);else v.lots.push(l);
    v.harvestPhotos.push({id:op.id,harvest_order_id:op.entityId,agave_lot_id:id,storage_bucket:'harvest-evidence',storage_path:op.payload.path,pending:true});
-  }else{const t=v.trips.find((t:any)=>t.id===op.entityId);if(t){t.status=op.kind==='field_arrival'?'AT_FIELD':op.payload.expected==='AT_FIELD'?'LOADING':'IN_TRANSIT';t.pending=true}}
+  }else{const t=v.trips.find((t:any)=>t.id===op.entityId);if(t){t.status=op.kind==='field_arrival'?'AT_FIELD':'LOADING';t.pending=true}}
  }
  for(const p of photos){if(p.kind==='harvest'&&!v.harvestPhotos.some((x:any)=>x.storage_path===p.path))v.harvestPhotos.push({id:p.id,harvest_order_id:p.entityId,storage_bucket:p.bucket,storage_path:p.path,pending:true})}
  return v;
