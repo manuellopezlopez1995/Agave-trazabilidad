@@ -27,7 +27,12 @@ export async function syncEvidence(organizationId:string,userId:string,onProgres
    else if(item.kind==='delivery')data={...common,delivery_id:item.entityId,evidence_type:'PHOTO',mime_type:item.mimeType,file_size_bytes:item.blob.size,uploaded_by:item.userId,legibility_confirmed:item.legibilityConfirmed};
    else if(item.kind==='safety')data={organization_id:item.organizationId,trip_id:item.entityId,uploaded_by:item.userId,storage_bucket:item.bucket,storage_path:item.path,mime_type:item.mimeType,file_size_bytes:item.blob.size,captured_at:item.capturedAt,equipment_confirmed:true,photo_kind:item.photoKind??'PPE'};
    else {if(!item.weighing)throw Error('Pesaje pendiente sin medición');data={...common,trip_id:item.entityId,weighing_type:item.weighing.weighingType,gross_weight_kg:item.weighing.gross,tare_weight_kg:item.weighing.tare,net_weight_kg:item.weighing.gross-item.weighing.tare,ticket_number:item.weighing.ticketNumber,recorded_by:item.userId,legibility_confirmed:item.legibilityConfirmed,ticket_storage_path:item.path,ocr_reading:item.weighing.ocrReading??null,ocr_corrected_fields:item.weighing.correctedFields??[],ticket_sha256:item.weighing.ticketSha256??null,confirmed_at:new Date().toISOString()};delete data.storage_path}
-   data.id=item.id; // Stable primary key also deduplicates concurrent tabs without Web Locks.
+   // La clave de IndexedDB es la ruta; el identificador de la tabla es el UUID
+   // estable del archivo al final de esa ruta. Así también se recuperan las
+   // fotos que ya estaban pendientes antes de esta corrección.
+   const fileId=item.path.split('/').pop()?.replace(/\.(jpg|png)$/i,'');
+   if(!fileId||! /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fileId))throw Error('La fotografía pendiente no tiene identificador válido');
+   data.id=fileId;
    const {error:insertError}=await supabase.from(table).insert(data);if(insertError){const {data:retry,error:retryError}=await supabase.from(table).select('id').eq(column,item.path).maybeSingle();if(retryError||!retry)throw insertError}
   }
   await removeEvidence(item.id);synced++;onProgress?.(items.length-synced);
