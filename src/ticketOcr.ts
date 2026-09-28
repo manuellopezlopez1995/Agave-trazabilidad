@@ -1,7 +1,7 @@
-import {createWorker} from 'tesseract.js';
+import type {Worker} from 'tesseract.js';
 
 export type TicketFields={gross?:number;tare?:number;printedNet?:number;folio?:string;date?:string;time?:string};
-export type TicketFailureCode='OCR_ENGINE_FAILED'|'OCR_EMPTY_RESULT'|'FIELD_NOT_FOUND'|'LOW_CONFIDENCE'|'VALIDATION_FAILED'|'PARSER_FAILED'|'ASSET_LOAD_FAILED'|'OCR_TIMEOUT';
+export type TicketFailureCode='OCR_ENGINE_FAILED'|'OCR_EMPTY_RESULT'|'FIELD_NOT_FOUND'|'LOW_CONFIDENCE'|'VALIDATION_FAILED'|'PARSER_FAILED'|'ASSET_LOAD_FAILED'|'OCR_TIMEOUT'|'OCR_NOT_CONFIGURED'|'OCR_OFFLINE'|'VISION_MONTHLY_LIMIT'|'VISION_USER_LIMIT'|'TRIP_ACCESS_DENIED'|'GOOGLE_AUTH_FAILED'|'GOOGLE_VISION_FAILED'|'OCR_BUDGET_UNAVAILABLE';
 export type TicketReading={fields:TicketFields;netKg?:number;confidence:number;fieldConfidence:Partial<Record<keyof TicketFields,number>>;warnings:string[];diagnostics?:TicketDiagnostics};
 type Key=keyof TicketFields;
 type Candidate={value:string|number;quality:number;pass:string;line:string;reason:string};
@@ -17,7 +17,7 @@ function kilograms(raw:string):number|undefined{
  const n=Number(normalized);return Number.isFinite(n)&&n>0&&n<=200000?n:undefined;
 }
 function dates(line:string):string[]{return [...line.matchAll(/\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/g)].map(x=>x[0])}
-function times(line:string):string[]{return [...line.matchAll(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\b/g)].map(x=>x[0])}
+function times(line:string):string[]{return [...line.matchAll(/\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?:\s*[AP]\.?M\.?)?\b/gi)].map(x=>x[0].replace(/\s+/g,' ').trim())}
 function findCandidates(passes:Pass[]):Record<Key,Candidate[]>{
  const all=Object.fromEntries(keys.map(k=>[k,[]])) as unknown as Record<Key,Candidate[]>;
  for(const [index,pass] of passes.entries()){
@@ -44,7 +44,7 @@ function findCandidates(passes:Pass[]):Record<Key,Candidate[]>{
  return all;
 }
 function rank(items:Candidate[]){const grouped=new Map<string,{value:string|number;quality:number;votes:Set<string>}>();for(const x of items){const k=String(x.value),old=grouped.get(k);if(old){old.quality=Math.max(old.quality,x.quality);old.votes.add(x.pass)}else grouped.set(k,{value:x.value,quality:x.quality,votes:new Set([x.pass])})}return [...grouped.values()].map(x=>({value:x.value,quality:Math.min(99,x.quality+Math.min(3,x.votes.size-1)*5),votes:x.votes.size})).sort((a,b)=>b.quality-a.quality||b.votes-a.votes||String(a.value).localeCompare(String(b.value)))}
-export function parseTicketPasses(passes:Pass[]):TicketReading{
+function parseOneWeighing(passes:Pass[]):TicketReading{
  const candidates=findCandidates(passes),ranked=Object.fromEntries(keys.map(k=>[k,rank(candidates[k])])) as Record<Key,ReturnType<typeof rank>>;
  const fields:TicketFields={},fieldConfidence:TicketReading['fieldConfidence']={},validation:string[]=[];
  const gross=ranked.gross.slice(0,5),tare=ranked.tare.slice(0,5),net=ranked.printedNet.slice(0,5);
@@ -59,6 +59,33 @@ export function parseTicketPasses(passes:Pass[]):TicketReading{
  const diagnostics:TicketDiagnostics={passes:passes.map((p,i)=>({name:p.name??`intento OCR ${i+1}`,text:p.text,confidence:p.confidence})),candidates,selected:fields,validation,failureCodes};
  return {fields,netKg,fieldConfidence,confidence:passes.length?Math.round(Math.max(...passes.map(x=>x.confidence))):0,warnings,diagnostics};
 }
+// A ticket may contain several real PESADAS. Keep their fields in separate
+// groups so the entry timestamp cannot replace the exit timestamp. OCR attempts
+// are independent observations of those same groups, not additional pesadas.
+export function parseTicketPasses(passes:Pass[]):TicketReading{
+ const header=/^\s*(?:PESO|PESADA|WEIGHT)\s+DE\s+(?:ENTRADA|SALIDA|INGRESO|EGRESO|ARRIVAL|DEPARTURE)\b/i;
+ const grouped=new Map<string,Pass[]>();let multiple=false;
+ for(const pass of passes){
+  const lines=pass.text.split(/\r?\n/);let group='sin encabezado';
+  for(const line of lines){const match=line.match(header);if(match){group=match[0].trim().toUpperCase().replace(/\s+/g,' ');multiple=true}
+   const existing=grouped.get(group)??[];if(!grouped.has(group))grouped.set(group,existing);
+   let current=existing.find(p=>p.name===pass.name);if(!current){current={name:pass.name,confidence:pass.confidence,text:''};existing.push(current)}
+   current.text+=(current.text?'\n':'')+line;
+  }
+ }
+ if(!multiple)return parseOneWeighing(passes);
+ const results=[...grouped.entries()].map(([name,items])=>({name,reading:parseOneWeighing(items)}));
+ const score=(result:typeof results[number])=>{
+  const f=result.reading.fields,complete=Number(f.gross!==undefined)+Number(f.tare!==undefined)+Number(f.printedNet!==undefined);
+  const consistent=f.gross!==undefined&&f.tare!==undefined&&f.printedNet!==undefined&&Math.abs(f.gross-f.tare-f.printedNet)<=2;
+  return complete*100+Number(consistent)*150+Number(!!f.folio)*15+Number(!!f.date)*5+Number(!!f.time)*5+(/SALIDA|EGRESO|DEPARTURE/.test(result.name)?1:0);
+ };
+ results.sort((a,b)=>score(b)-score(a));const chosen=results[0].reading;
+ chosen.diagnostics!.validation.unshift(`Pesada seleccionada: ${results[0].name}; pesadas detectadas: ${results.map(r=>r.name).join(', ')}`);
+ // Full OCR text remains visible in ADMIN diagnostics, even when one pesada wins.
+ chosen.diagnostics!.passes=passes.map((p,i)=>({name:p.name??`intento OCR ${i+1}`,text:p.text,confidence:p.confidence}));
+ return chosen;
+}
 export function parseTicket(text:string,confidence:number):TicketReading{return parseTicketPasses([{text,confidence}])}
 function linesFromBlocks(blocks:any[]|null|undefined):OcrLine[]{return (blocks??[]).flatMap(block=>(block.paragraphs??[]).flatMap((p:any)=>(p.lines??[]).map((l:any)=>({text:String(l.text??'').trim(),confidence:Number(l.confidence??0),bbox:l.bbox,words:l.words}))));}
 async function imageInfo(blob:Blob){const bytes=await blob.arrayBuffer();const hash=typeof crypto!=='undefined'&&crypto.subtle?Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),x=>x.toString(16).padStart(2,'0')).join(''):undefined;const url=URL.createObjectURL(blob);const image=new Image();try{await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(Error('No se pudo abrir el ticket'));image.src=url});return {image,width:image.naturalWidth,height:image.naturalHeight,hash,url}}catch(e){URL.revokeObjectURL(url);throw e}}
@@ -72,11 +99,11 @@ async function variant(image:HTMLImageElement,box:{x:number;y:number;w:number;h:
 }
 function timeout<T>(task:Promise<T>,milliseconds:number,stage:string):Promise<T>{let timer:ReturnType<typeof setTimeout>;return Promise.race([task,new Promise<T>((_,reject)=>{timer=setTimeout(()=>reject(new Error(`OCR_TIMEOUT: ${stage} excedió ${milliseconds} ms`)),milliseconds)})]).finally(()=>clearTimeout(timer!))}
 export async function readTicket(blob:Blob,onProgress?:(diagnostics:TicketDiagnostics)=>void):Promise<TicketReading>{
- let worker:Awaited<ReturnType<typeof createWorker>>|undefined;const passes:Pass[]=[];let info:Awaited<ReturnType<typeof imageInfo>>|undefined;
+ let worker:Worker|undefined;const passes:Pass[]=[];let info:Awaited<ReturnType<typeof imageInfo>>|undefined;
  const progress:TicketDiagnostics={passes:[],candidates:{gross:[],tare:[],printedNet:[],folio:[],date:[],time:[]},selected:{},validation:[],failureCodes:{},engineStatus:'INICIADO',stage:'decodificando imagen'};
  const report=()=>onProgress?.({...progress,passes:progress.passes.map(p=>({...p})),image:progress.image&&{...progress.image}});report();
  try{
-  info=await timeout(imageInfo(blob),15000,'decodificación de imagen');progress.image={sha256:info.hash,width:info.width,height:info.height,orientation:await exifOrientation(blob),bytes:blob.size};progress.stage='cargando worker y modelos spa+eng';report();worker=await timeout(createWorker('spa+eng'),30000,'carga de worker/modelos');progress.engineStatus='WORKER_CARGADO';report();
+  info=await timeout(imageInfo(blob),15000,'decodificación de imagen');progress.image={sha256:info.hash,width:info.width,height:info.height,orientation:await exifOrientation(blob),bytes:blob.size};progress.stage='cargando worker y modelos spa+eng';report();worker=await timeout((await import('tesseract.js')).createWorker('spa+eng'),30000,'carga de worker/modelos');progress.engineStatus='WORKER_CARGADO';report();
   const read=async(input:Blob,name:string)=>{progress.stage=`reconociendo ${name}`;const started=Date.now();const attempt:TicketDiagnostics['passes'][number]={name,text:'',confidence:0,status:'ERROR'};progress.passes.push(attempt);report();try{if(name==='original'){attempt.width=info!.width;attempt.height=info!.height}else if(typeof createImageBitmap==='function'){try{const bitmap=await timeout(createImageBitmap(input),5000,`dimensiones ${name}`);attempt.width=bitmap.width;attempt.height=bitmap.height;bitmap.close()}catch{/* Las dimensiones diagnósticas no deben impedir OCR. */}}const result=await timeout(worker!.recognize(input,{}, {text:true,blocks:true}),25000,`lectura ${name}`);attempt.text=result.data.text;attempt.confidence=result.data.confidence;attempt.status='OK';passes.push({text:result.data.text,confidence:result.data.confidence,lines:linesFromBlocks(result.data.blocks),name})}finally{attempt.durationMs=Date.now()-started;report()}};
   await read(blob,'original');
   // Consistent baseline passes run for every photograph. Later passes only add candidates.
