@@ -47,7 +47,13 @@ export async function photographTicket():Promise<TicketDraft|null>{
 export async function photographSafetyEquipment(organizationId:string,tripId:string,userId:string):Promise<EvidenceResult|null>{
  if(!supabase)throw Error('Falta configurar Supabase');
  if(![organizationId,tripId,userId].every(id=>uuidPattern.test(id)))throw Error('La ruta de evidencia no es válida');
- const draft=await photographTicket();if(!draft)return null;
+ if(Platform.OS!=='web'){const permission=await ImagePicker.requestCameraPermissionsAsync();if(!permission.granted)throw Error('Activa la cámara para registrar el equipo de protección')}
+ const picture=await ImagePicker.launchCameraAsync({quality:1,base64:true,exif:true,allowsEditing:false});if(picture.canceled)return null;
+ const asset=picture.assets[0];if(!asset?.base64)throw Error('La cámara no devolvió la fotografía');
+ const bytes=decodeBase64(asset.base64);if(!bytes.byteLength||bytes.byteLength>maxEvidenceBytes)throw Error('La foto original debe pesar menos de 12 MB');
+ const mimeType=asset.mimeType==='image/png'?'image/png':'image/jpeg';
+ const draft:TicketDraft={bytes,blob:new Blob([bytes],{type:mimeType}),mimeType,capturedAt:new Date().toISOString()};
+ try{const permission=await Location.getForegroundPermissionsAsync();if(permission.granted){const point=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced});draft.latitude=point.coords.latitude;draft.longitude=point.coords.longitude}}catch{/* GPS opcional. */}
  const confirmed=Platform.OS==='web'?window.confirm('Confirma que apareces en la fotografía con todo el equipo requerido para este destino.')
   :await new Promise<boolean>(resolve=>Alert.alert('Equipo de protección','Confirma que apareces con todo el equipo requerido.',[{text:'Repetir foto',onPress:()=>resolve(false)},{text:'Confirmar',onPress:()=>resolve(true)}],{cancelable:false}));
  if(!confirmed)return null;
