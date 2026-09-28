@@ -10,11 +10,27 @@ export async function readTicketWithVision(blob:Blob,tripId:string,session:Sessi
  if(!navigator.onLine)throw Error('OCR_OFFLINE: la lectura de servidor requiere conexión; conserva la fotografía');
  const progress:TicketDiagnostics={passes:[],candidates:{gross:[],tare:[],printedNet:[],folio:[],date:[],time:[]},selected:{},validation:[],failureCodes:{},engineStatus:'INICIADO',stage:'enviando fotografía original al servidor'};
  onProgress?.(progress);
- let response:Response;
- try{response=await fetch(`${url}/functions/v1/ticket-vision-ocr`,{
-  method:'POST',headers:{Authorization:`Bearer ${session.access_token}`,apikey:key,'Content-Type':blob.type||'image/jpeg','x-trip-id':tripId},
-  body:blob,signal:AbortSignal.timeout(55000),
- })}catch(e){throw Error(e instanceof Error&&e.name==='TimeoutError'?'OCR_TIMEOUT: servidor no respondió':`OCR_ENGINE_FAILED: ${String(e)}`)}
+ let response:Response|undefined;
+ let lastError:unknown;
+ for(let attempt=1;attempt<=3;attempt++){
+  try{
+   response=await fetch(`${url}/functions/v1/ticket-vision-ocr`,{
+    method:'POST',headers:{Authorization:`Bearer ${session.access_token}`,apikey:key,'Content-Type':blob.type||'image/jpeg','x-trip-id':tripId},
+    body:blob,signal:AbortSignal.timeout(55000),
+   });
+   break;
+  }catch(e){
+   lastError=e;
+   if(!navigator.onLine)throw Error('OCR_OFFLINE: se perdió la conexión; la fotografía continúa guardada');
+   if(attempt<3){
+    onProgress?.({...progress,stage:`Conexión interrumpida. Reintentando lectura de la fotografía guardada (${attempt}/2)`});
+    await new Promise(resolve=>setTimeout(resolve,attempt*1200));
+   }
+  }
+ }
+ if(!response)throw Error(lastError instanceof Error&&lastError.name==='TimeoutError'
+  ?'OCR_TIMEOUT: el servidor no respondió tras tres intentos; vuelve a procesar la fotografía guardada'
+  :`OCR_NETWORK_FAILED: no se pudo conectar con el servidor tras tres intentos (${String(lastError)}); la fotografía continúa guardada`);
  const result=await response.json().catch(()=>null);
  if(!response.ok)throw Error(`${result?.code??'OCR_ENGINE_FAILED'}: ${response.status}`);
  if(typeof result?.rawText!=='string'||typeof result?.imageSha256!=='string')throw Error('PARSER_FAILED: respuesta OCR incompleta');
