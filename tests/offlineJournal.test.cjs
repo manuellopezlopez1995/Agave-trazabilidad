@@ -22,7 +22,7 @@ test('offline persistence, real transport interruption, replay and actor isolati
  await journal.enqueueOperation({id,actorId:actor,organizationId:org,kind:'harvest',entityId:'h',capturedAt:now,queuedAt:now,payload:{expected:'ASSIGNED'}});
  const draft={id:'ticket-a',actorId:actor,organizationId:org,entityId:'t',kind:'ticket',blob:new Blob(['ORIGINAL PHOTO'],{type:'image/png'}),mimeType:'image/png',capturedAt:now};await journal.saveDraft(draft);
  delete loaded.offlineJournal;const reopened=load('offlineJournal');
- assert.equal((await reopened.operations(actor,org)).length,1);assert.equal((await reopened.operations('actor-b',org)).length,0);assert.equal(await (await reopened.drafts(actor,org))[0].blob.text(),'ORIGINAL PHOTO');
+ assert.equal((await reopened.operations(actor,org)).length,1);assert.equal((await reopened.operations('actor-b',org)).length,0);assert.equal(new TextDecoder().decode((await reopened.drafts(actor,org))[0].bytes),'ORIGINAL PHOTO');
  const cached=await reopened.readOfflineView(actor);assert.equal(reopened.projectOfflineView(cached.view,await reopened.operations(actor,org),[]).harvests[0].status,'IN_PROGRESS');assert.equal(cached.view.harvests[0].status,'ASSIGNED');
  await assert.rejects(reopened.syncJournal(actor,org),/Sin conexión/);assert.equal((await reopened.operations(actor,org)).length,1);
  navigator.onLine=true;await listen();dropResponse=true;
@@ -39,7 +39,19 @@ test('installed PWA remembers practice workspace when start_url loses query',()=
 test('concurrent photo synchronization creates one stable database record',async()=>{
  const rows=new Map();backend.supabase.from=()=>({select:()=>({eq:(column,value)=>({maybeSingle:async()=>({data:[...rows.values()].find(x=>x[column]===value)??null,error:null})})}),insert:async data=>{if(rows.has(data.id))return {error:Error('duplicate key')};rows.set(data.id,data);return {error:null}}});
  const evidence=load('offlineEvidence'),id=crypto.randomUUID();navigator.onLine=true;
- await evidence.queueEvidence({id,kind:'harvest',organizationId:'photo-org',entityId:'h',userId:'photo-actor',bucket:'harvest-evidence',path:'concurrent-photo',mimeType:'image/png',blob:new Blob(['ORIGINAL'],{type:'image/png'}),capturedAt:new Date().toISOString(),legibilityConfirmed:false});
+ await evidence.queueEvidence({id,kind:'harvest',organizationId:'photo-org',entityId:'h',userId:'photo-actor',bucket:'harvest-evidence',path:`photo-org/h/photo-actor/${id}.png`,mimeType:'image/png',blob:new Blob(['ORIGINAL'],{type:'image/png'}),capturedAt:new Date().toISOString(),legibilityConfirmed:false});
  await Promise.all([evidence.syncEvidence('photo-org','photo-actor'),evidence.syncEvidence('photo-org','photo-actor')]);
  assert.equal(rows.size,1);assert.ok(rows.has(id));assert.equal((await evidence.pendingEvidence()).filter(x=>x.id===id).length,0);
+});
+
+test('second Brix original survives reopen and resolves an offline lot before synchronization',async()=>{
+ const rows=new Map(),actualLot=crypto.randomUUID(),provisionalLot=crypto.randomUUID(),id=crypto.randomUUID(),sourcePath='initial-brix.jpg';
+ rows.set('initial',{id:'initial',storage_path:sourcePath,agave_lot_id:actualLot});
+ backend.supabase.from=()=>({select:()=>({eq:(column,value)=>({maybeSingle:async()=>({data:[...rows.values()].find(x=>x[column]===value)??null,error:null}),single:async()=>({data:[...rows.values()].find(x=>x[column]===value)??null,error:null})})}),insert:async data=>{rows.set(data.id,data);return {error:null}}});
+ const evidence=load('offlineEvidence');navigator.onLine=false;
+ await evidence.queueEvidence({id:`org/h/user/${id}.jpg`,kind:'harvest',agaveLotId:provisionalLot,agaveLotEvidencePath:sourcePath,organizationId:'org',entityId:'h',userId:'user',bucket:'harvest-evidence',path:`org/h/user/${id}.jpg`,mimeType:'image/jpeg',blob:new Blob(['SECOND ORIGINAL'],{type:'image/jpeg'}),capturedAt:new Date().toISOString(),legibilityConfirmed:false});
+ delete loaded.offlineEvidence;const reopened=load('offlineEvidence'),stored=(await reopened.pendingEvidence()).find(x=>x.path.endsWith(`${id}.jpg`));
+ assert.equal(await stored.blob.text(),'SECOND ORIGINAL');assert.equal(stored.agaveLotId,provisionalLot);
+ navigator.onLine=true;await reopened.syncEvidence('org','user');assert.equal(rows.get(id).agave_lot_id,actualLot);
+ assert.equal((await reopened.pendingEvidence()).filter(x=>x.id===stored.id).length,0);
 });
