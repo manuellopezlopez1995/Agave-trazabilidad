@@ -13,7 +13,11 @@ function validateConfiguration(){
  return null;
 }
 
+// Optional named sessions isolate authenticated users during supervised multi-role
+// acceptance tests. The name grants no permissions: Supabase still verifies each JWT.
+const sessionName=typeof window!=='undefined'?new URLSearchParams(window.location.search).get('session'):null;
+const sessionStorageKey=sessionName&&/^offline-(admin|crew|driver)$/.test(sessionName)?`agave-${sessionName}-auth`:undefined;
 export const configurationError=validateConfiguration();
 export const supabase=configurationError?null:createClient(url!,key!,{
- auth:{storage:AsyncStorage,autoRefreshToken:true,persistSession:true,detectSessionInUrl:false}
+ auth:{...(sessionStorageKey?{storageKey:sessionStorageKey}:{}),storage:AsyncStorage,autoRefreshToken:true,persistSession:true,detectSessionInUrl:false}
 });
