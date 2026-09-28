@@ -52,7 +52,7 @@ function operationalDate(timeZone:string){return new Intl.DateTimeFormat('en-CA'
 function followingDate(date:string){const next=new Date(`${date}T00:00:00Z`);next.setUTCDate(next.getUTCDate()+1);return next.toISOString().slice(0,10)}
 function displayDate(date:string){const [year,month,day]=date.split('-');return `${day}/${month}/${year}`}
 function coordinates(latitude:string,longitude:string){return {latitude:decimal(latitude,'Latitud',-90,90),longitude:decimal(longitude,'Longitud',-180,180)}}
-function navigationUrl(latitude:number,longitude:number){return Platform.OS==='ios'?`https://maps.apple.com/?daddr=${latitude},${longitude}`:`https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`}
+function navigationUrl(latitude:number,longitude:number){return Platform.OS==='ios'?`https://maps.apple.com/?daddr=${latitude},${longitude}&dirflg=d`:`https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=driving`}
 function confirm(title:string,message:string,run:()=>void){if(Platform.OS==='web'){if(window.confirm(`${title}\n\n${message}`))run();return}Alert.alert(title,message,[{text:'Cancelar',style:'cancel'},{text:'Confirmar',style:'default',onPress:run}])}
 function showError(message:string){if(Platform.OS==='web')window.alert(message);else Alert.alert('No se pudo completar',message)}
 export default function RealApp(){
