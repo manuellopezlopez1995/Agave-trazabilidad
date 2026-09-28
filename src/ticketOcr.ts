@@ -1,7 +1,7 @@
 import {createWorker} from 'tesseract.js';
 
 export type TicketFields={gross?:number;tare?:number;printedNet?:number;folio?:string;date?:string;time?:string};
-export type TicketFailureCode='OCR_ENGINE_FAILED'|'OCR_EMPTY_RESULT'|'FIELD_NOT_FOUND'|'LOW_CONFIDENCE'|'VALIDATION_FAILED'|'PARSER_FAILED'|'ASSET_LOAD_FAILED';
+export type TicketFailureCode='OCR_ENGINE_FAILED'|'OCR_EMPTY_RESULT'|'FIELD_NOT_FOUND'|'LOW_CONFIDENCE'|'VALIDATION_FAILED'|'PARSER_FAILED'|'ASSET_LOAD_FAILED'|'OCR_TIMEOUT';
 export type TicketReading={fields:TicketFields;netKg?:number;confidence:number;fieldConfidence:Partial<Record<keyof TicketFields,number>>;warnings:string[];diagnostics?:TicketDiagnostics};
 type Key=keyof TicketFields;
 type Candidate={value:string|number;quality:number;pass:string;line:string;reason:string};
@@ -70,12 +70,14 @@ async function variant(image:HTMLImageElement,box:{x:number;y:number;w:number;h:
  for(let i=0;i<data.length;i+=4){const gray=.299*data[i]+.587*data[i+1]+.114*data[i+2];const stretched=Math.max(0,Math.min(255,(gray-low)*255/span));const v=style==='gray'?gray:style==='binary'?(stretched<Math.min(210,(low+high)/2+24)?0:255):stretched;data[i]=data[i+1]=data[i+2]=v}ctx.putImageData(pixels,0,0);
  return new Promise<Blob>((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('No se pudo procesar imagen')),'image/png'));
 }
-export async function readTicket(blob:Blob):Promise<TicketReading>{
+function timeout<T>(task:Promise<T>,milliseconds:number,stage:string):Promise<T>{let timer:ReturnType<typeof setTimeout>;return Promise.race([task,new Promise<T>((_,reject)=>{timer=setTimeout(()=>reject(new Error(`OCR_TIMEOUT: ${stage} excedió ${milliseconds} ms`)),milliseconds)})]).finally(()=>clearTimeout(timer!))}
+export async function readTicket(blob:Blob,onProgress?:(diagnostics:TicketDiagnostics)=>void):Promise<TicketReading>{
  let worker:Awaited<ReturnType<typeof createWorker>>|undefined;const passes:Pass[]=[];let info:Awaited<ReturnType<typeof imageInfo>>|undefined;
  const progress:TicketDiagnostics={passes:[],candidates:{gross:[],tare:[],printedNet:[],folio:[],date:[],time:[]},selected:{},validation:[],failureCodes:{},engineStatus:'INICIADO',stage:'decodificando imagen'};
+ const report=()=>onProgress?.({...progress,passes:progress.passes.map(p=>({...p})),image:progress.image&&{...progress.image}});report();
  try{
-  info=await imageInfo(blob);progress.image={sha256:info.hash,width:info.width,height:info.height,orientation:await exifOrientation(blob),bytes:blob.size};progress.stage='cargando worker y modelos spa+eng';worker=await createWorker('spa+eng');progress.engineStatus='WORKER_CARGADO';
-  const read=async(input:Blob,name:string)=>{progress.stage=`reconociendo ${name}`;const started=Date.now();const attempt:TicketDiagnostics['passes'][number]={name,text:'',confidence:0,status:'ERROR'};progress.passes.push(attempt);try{if(name==='original'){attempt.width=info!.width;attempt.height=info!.height}else if(typeof createImageBitmap==='function'){try{const bitmap=await createImageBitmap(input);attempt.width=bitmap.width;attempt.height=bitmap.height;bitmap.close()}catch{/* Las dimensiones diagnósticas no deben impedir OCR. */}}const result=await worker!.recognize(input,{}, {text:true,blocks:true});attempt.text=result.data.text;attempt.confidence=result.data.confidence;attempt.status='OK';passes.push({text:result.data.text,confidence:result.data.confidence,lines:linesFromBlocks(result.data.blocks),name})}finally{attempt.durationMs=Date.now()-started}};
+  info=await timeout(imageInfo(blob),15000,'decodificación de imagen');progress.image={sha256:info.hash,width:info.width,height:info.height,orientation:await exifOrientation(blob),bytes:blob.size};progress.stage='cargando worker y modelos spa+eng';report();worker=await timeout(createWorker('spa+eng'),30000,'carga de worker/modelos');progress.engineStatus='WORKER_CARGADO';report();
+  const read=async(input:Blob,name:string)=>{progress.stage=`reconociendo ${name}`;const started=Date.now();const attempt:TicketDiagnostics['passes'][number]={name,text:'',confidence:0,status:'ERROR'};progress.passes.push(attempt);report();try{if(name==='original'){attempt.width=info!.width;attempt.height=info!.height}else if(typeof createImageBitmap==='function'){try{const bitmap=await timeout(createImageBitmap(input),5000,`dimensiones ${name}`);attempt.width=bitmap.width;attempt.height=bitmap.height;bitmap.close()}catch{/* Las dimensiones diagnósticas no deben impedir OCR. */}}const result=await timeout(worker!.recognize(input,{}, {text:true,blocks:true}),25000,`lectura ${name}`);attempt.text=result.data.text;attempt.confidence=result.data.confidence;attempt.status='OK';passes.push({text:result.data.text,confidence:result.data.confidence,lines:linesFromBlocks(result.data.blocks),name})}finally{attempt.durationMs=Date.now()-started;report()}};
   await read(blob,'original');
   // Consistent baseline passes run for every photograph. Later passes only add candidates.
   await read(await variant(info.image,{x:0,y:0,w:1,h:1},'contrast'),'contraste completo');
@@ -90,5 +92,5 @@ export async function readTicket(blob:Blob):Promise<TicketReading>{
   }
   reading.diagnostics!.image=progress.image;reading.diagnostics!.passes=progress.passes;reading.diagnostics!.engineStatus='COMPLETADO';reading.diagnostics!.stage='OCR y parser completados';
   console.debug('Diagnóstico OCR de ticket',reading.diagnostics);return reading;
- }catch(e){progress.engineStatus='ERROR';const error=e instanceof Error?e:new Error(String(e));const code:TicketFailureCode=/fetch|network|404|load|worker|import|async.*require/i.test(error.message)?'ASSET_LOAD_FAILED':'OCR_ENGINE_FAILED';progress.engineError={code,message:error.message};Object.assign(error,{ticketDiagnostics:progress});throw error}finally{if(info)URL.revokeObjectURL(info.url);if(worker)await worker.terminate()}
+ }catch(e){progress.engineStatus='ERROR';const error=e instanceof Error?e:new Error(String(e));const code:TicketFailureCode=/OCR_TIMEOUT/.test(error.message)?'OCR_TIMEOUT':/fetch|network|404|load|worker|import|async.*require/i.test(error.message)?'ASSET_LOAD_FAILED':'OCR_ENGINE_FAILED';progress.engineError={code,message:error.message};report();Object.assign(error,{ticketDiagnostics:{...progress,passes:progress.passes.map(p=>({...p}))}});throw error}finally{if(info)URL.revokeObjectURL(info.url);if(worker){try{await timeout(worker.terminate(),3000,'liberación de worker')}catch(e){console.warn('No se pudo liberar worker OCR',e)}}}
 }
