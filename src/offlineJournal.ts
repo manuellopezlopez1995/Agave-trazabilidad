@@ -1,6 +1,19 @@
 import {supabase} from './backend';
 import {pendingEvidence,syncEvidence,PendingEvidence} from './offlineEvidence';
-export const practiceMode=typeof window!=='undefined'&&new URLSearchParams(window.location.search).get('practice')==='1';
+// Installed PWAs reopen at start_url without query parameters. Remember the
+// chosen workspace per named session; this preference grants no access.
+export const practiceMode=(()=>{if(typeof window==='undefined')return false;const params=new URLSearchParams(window.location.search),explicit=params.get('practice'),key=`agave-workspace:${params.get('session')??'default'}`;try{if(explicit==='0'||explicit==='1')localStorage.setItem(key,explicit);return (explicit??localStorage.getItem(key))==='1'}catch{return explicit==='1'}})();
+export async function prepareOfflineShell(){
+ if(!navigator.onLine)throw Error('Prepara el dispositivo antes de perder señal');
+ if(!('serviceWorker' in navigator)||typeof caches==='undefined')throw Error('Este navegador no permite preparar la aplicación sin señal');
+ let timer:ReturnType<typeof setTimeout>;
+ const registration=await Promise.race([navigator.serviceWorker.ready,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('La aplicación aún no está lista para abrir sin señal. Vuelve a preparar con conexión.')),20000)})]).finally(()=>clearTimeout(timer!));
+ const scripts=Array.from(document.querySelectorAll<HTMLScriptElement>('script[src]')).map(x=>x.src).filter(x=>x.startsWith(registration.scope));
+ if(!scripts.length)throw Error('No se encontró la versión de la aplicación para conservar');
+ const cache=await caches.open('agave-shell-v2');await cache.addAll([registration.scope,...scripts]);
+ if(navigator.storage?.persist)await navigator.storage.persist();
+}
+
 export type OfflineOperation={id:string;actorId:string;organizationId:string;kind:'harvest'|'lot'|'trip'|'field_arrival';entityId:string;capturedAt:string;queuedAt:string;payload:Record<string,unknown>;blob?:Blob;error?:string};
 export type OfflineDraft={id:string;actorId:string;organizationId:string;entityId:string;kind:'ticket'|'brix';type?:'ORIGIN'|'DESTINATION';blob:Blob;mimeType:string;capturedAt:string;latitude?:number;longitude?:number};
 type Store='operations'|'snapshots'|'drafts';
