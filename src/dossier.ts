@@ -1,4 +1,3 @@
-import {variance,recordedFieldWeight} from './operations';
 import {weightSummary} from './weightSummary';
 
 // Los identificadores técnicos sólo se utilizan para enlazar los datos y nunca se imprimen.
@@ -22,14 +21,10 @@ export function dossierGaps(data:DossierData){
   if(!trips.length)gaps.push(`El lote ${lot.trace_code} aún no tiene viaje.`);
   for(const trip of trips){
    const ws=data.weighings.filter(w=>w.trip_id===trip.id),ds=data.deliveries.filter(d=>d.trip_id===trip.id);
-   if(!ws.some(w=>w.weighing_type==='ORIGIN'))gaps.push(`Falta completar el control operativo interno de ${trip.trace_code}.`);
    if(!ws.some(w=>w.weighing_type==='DESTINATION'))gaps.push(`Falta pesaje de destino en ${trip.trace_code}.`);
-   if(ws.some(w=>!w.ticket_storage_path||!w.legibility_confirmed))gaps.push(`Falta una evidencia obligatoria del control operativo de ${trip.trace_code}.`);
+   if(ws.some(w=>w.weighing_type==='DESTINATION'&&(!w.ticket_storage_path||!w.legibility_confirmed)))gaps.push(`Falta una evidencia obligatoria del control operativo de ${trip.trace_code}.`);
    if(!ds.length||ds.some(d=>d.status!=='COMPLETED'))gaps.push(`Falta cerrar la entrega de ${trip.trace_code}.`);
-   const loaded=recordedFieldWeight(data.links.filter(x=>x.trip_id===trip.id));
-   const o=ws.find(w=>w.weighing_type==='ORIGIN'),dest=ws.find(w=>w.weighing_type==='DESTINATION');
-   const v=variance(loaded,o?.net_weight_kg??null,dest?.net_weight_kg??null,null,null,data.varianceLimitKg,data.varianceLimitPercent);
-   if(v.exceeded&&!data.varianceNotes?.some(n=>n.trip_id===trip.id&&n.reason?.trim().length>=10))gaps.push(`La conciliación interna de ${trip.trace_code} está pendiente de justificación.`);
+
   }
  }
  return [...new Set(gaps)];
@@ -45,16 +40,13 @@ export function buildDossier(data:DossierData){
  const trips=data.trips.map(t=>{
   const ls=data.links.filter(x=>x.trip_id===t.id).map(x=>data.lots.find(l=>l.id===x.agave_lot_id)).filter(Boolean);
   const ws=data.weighings.filter(w=>w.trip_id===t.id),ds=data.deliveries.filter(d=>d.trip_id===t.id);
-  const origin=ws.find(w=>w.weighing_type==='ORIGIN'),destination=ws.find(w=>w.weighing_type==='DESTINATION');
-  const loaded=recordedFieldWeight(data.links.filter(x=>x.trip_id===t.id));
-  const diff=variance(loaded,origin?.net_weight_kg??null,destination?.net_weight_kg??null,null,null,data.varianceLimitKg,data.varianceLimitPercent);
-  const notes=data.varianceNotes?.filter(n=>n.trip_id===t.id&&n.reason?.trim())??[];
+  const destination=ws.find(w=>w.weighing_type==='DESTINATION');
   const driver=data.drivers.find(p=>p.id===t.driver_id);
   const ticket=(w:any)=>w?`<article><h3>Ticket de báscula de destino / Evidencia de entrega</h3><table>${row('Folio',w.ticket_number)}${row('Fecha y hora',date(w.captured_at))}${row('Peso bruto',kg(w.gross_weight_kg))}${row('Tara',kg(w.tare_weight_kg))}${row('Peso neto',kg(w.net_weight_kg))}</table>${data.images.filter(i=>i.kind==='ticket'&&i.label===w.id).map(i=>photo(i,'Ticket de báscula de destino / Evidencia de entrega',[`Folio: ${w.ticket_number??'No registrado'}`,`Peso bruto: ${kg(w.gross_weight_kg)}`,`Tara: ${kg(w.tare_weight_kg)}`,`Peso neto: ${kg(w.net_weight_kg)}`])).join('')||'<p>Fotografía no disponible.</p>'}</article>`:'<p>Ticket de destino pendiente.</p>';
   return `<section class="trip"><h2>Transporte · viaje ${esc(t.plantation_folio??t.trace_code)}</h2><table>${row('Referencia de viaje',t.trace_code)}${row('Estado',t.status)}${row('Destino',t.destination_name)}${row('Chofer',driver?.full_name??'Sin identificar')}${row('Placa',t.vehicle_plate)}${row('Salida',date(t.departed_at))}${row('Llegada',date(t.arrived_at))}${row('Lotes vinculados',ls.map(l=>l.trace_code).join(', ')||'Sin lote')}</table>
   <h2>Pesaje de destino</h2><div class="ticket-grid">${ticket(destination)}</div>
   <h2>Resumen de entrega</h2><table>${row('Peso neto entregado (ticket de destino)',kg(destination?.net_weight_kg))}</table>
-  ${diff.exceeded?`<div class="variance"><strong>Conciliación operativa interna: ${notes.some(n=>n.reason.trim().length>=10)?'JUSTIFICADA':'PENDIENTE DE JUSTIFICAR'}</strong></div>`:''}
+
   <h2>Entrega</h2><p class="delivery">Entrega acreditada con ticket de destino</p>${ds.map(d=>`<table>${row('Referencia de entrega',d.trace_code)}${row('Comprador / destino',d.recipient_company)}${row('Estado',d.status)}${row('Fecha de cierre',date(d.received_at))}${row('Peso neto entregado',kg(destination?.net_weight_kg))}</table>`).join('')||'<p>Entrega no registrada.</p>'}</section>`;
  }).join('');
  const linked=new Set(data.trips.map(t=>t.id));
