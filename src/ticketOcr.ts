@@ -9,7 +9,7 @@ type OcrLine={text:string;confidence:number;bbox?:{x0:number;y0:number;x1:number
 type Pass={text:string;confidence:number;lines?:OcrLine[];name?:string};
 export type TicketDiagnostics={image?:{sha256?:string;width?:number;height?:number;orientation?:string;bytes?:number};passes:{name:string;text:string;confidence:number;width?:number;height?:number;status?:'OK'|'ERROR';durationMs?:number}[];candidates:Record<Key,Candidate[]>;selected:TicketFields;validation:string[];failureCodes:Partial<Record<Key,TicketFailureCode>>;engineStatus?:'INICIADO'|'WORKER_CARGADO'|'COMPLETADO'|'ERROR';stage?:string;engineError?:{code:TicketFailureCode;message:string};runtime?:{bundle?:string;serviceWorker?:string;cacheNames?:string[];online?:boolean}};
 const keys=['gross','tare','printedNet','folio','date','time'] as const;
-const labels:Record<Key,RegExp>={gross:/\b(?:peso\s*)?(?:bruto|gross|brut0)\b/i,tare:/\b(?:peso\s*)?(?:tara|tare)\b/i,printedNet:/\b(?:peso\s*)?(?:neto|net|net0)\b/i,folio:/\b(?:folio|ticket|boleta|(?:[i1l]d|n(?:o|º|°|úm(?:ero)?)\.?)(?:\s*(?:#|:|número))?)(?=\s|[:#.=\-°º]|\d)/i,date:/\bfecha\b/i,time:/\bhora\b/i};
+const labels:Record<Key,RegExp>={gross:/\b(?:peso\s*)?(?:bruto|gross|brut0)\b/i,tare:/\b(?:peso\s*)?(?:tara|tare)\b/i,printedNet:/\b(?:peso\s*)?(?:neto|net|net0)\b/i,folio:/\b(?:folio|ticket|boleta|(?:[i1l]d|n(?:o|º|°|úm(?:ero)?)\.?)(?:\s*(?:#|:|número))?)(?=\s|[:#.=\-°º]|\d|$)/i,date:/\bfecha\b/i,time:/\bhora\b/i};
 const numberRe=/(?:\d{1,3}(?:[., ]\d{3})+|\d{3,6})(?:[.,]\d{1,2})?/g;
 function kilograms(raw:string):number|undefined{
  const compact=raw.replace(/\s/g,'');const decimal=compact.match(/[.,](\d{1,2})$/);
@@ -35,8 +35,14 @@ function findCandidates(passes:Pass[]):Record<Key,Candidate[]>{
     for(const n of next){const value=kilograms(n.raw);if(value===undefined)continue;all[key].push({value,quality:Math.round(Math.min(98,quality*.55+42-Math.min(n.distance,24)*.5)),pass:passName,line,reason:n.distance===24?'línea siguiente':'etiqueta cercana'});}
    }
    const folio=labels.folio.exec(line);
-   if(folio){const rest=line.slice(folio.index+folio[0].length).replace(/^[\s:#.=\-°º]*(?:(?:no|número)\.?\s*)?/i,'');const values=rest.match(/^([A-Z0-9][A-Z0-9-]{1,38})\b/i);
-    if(values&&/\d/.test(values[1])&&!/^(?:kg|bruto|tara|neto)$/i.test(values[1]))all.folio.push({value:values[1],quality:Math.round(Math.min(98,quality*.65+30)),pass:passName,line,reason:'etiqueta de folio'});
+   if(folio){const rest=line.slice(folio.index+folio[0].length).replace(/^[\s:#.=\-°º]*(?:(?:no|número)\.?\s*)?/i,'');
+    const adjacent=[rest, i+1<lines.length?lines[i+1].text.trim():''];
+    for(const [distance,part] of adjacent.entries()){
+     if(distance&&(Object.values(labels).some(re=>re.test(part))||dates(part).length||times(part).length))continue;
+     const values=part.match(/^([A-Z0-9][A-Z0-9-]{1,38})\b/i);
+     if(values&&/\d/.test(values[1])&&!/^(?:kg|bruto|tara|neto)$/i.test(values[1]))all.folio.push({value:values[1],quality:Math.round(Math.min(98,quality*.65+30-distance*14)),pass:passName,line,reason:distance?'línea siguiente de folio':'etiqueta de folio'});
+     if(!distance&&values)break;
+    }
    }
    for(const [key,values] of [['date',dates(line)],['time',times(line)]] as const)for(const value of values)all[key].push({value,quality:Math.round(Math.min(98,quality*.7+(labels[key].test(line)?28:15))),pass:passName,line,reason:labels[key].test(line)?'etiqueta cercana':'patrón de fecha/hora'});
   }
