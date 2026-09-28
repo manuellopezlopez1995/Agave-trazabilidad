@@ -70,6 +70,7 @@ async function googleToken(account: ServiceAccount): Promise<string> {
 
 Deno.serve(async request => {
   const origin = request.headers.get('origin');
+  let stage = 'validating-request';
   if (request.method === 'OPTIONS') return new Response(null, { status: allowedOrigins.has(origin ?? '') ? 204 : 403, headers: cors(origin) });
   if (request.method !== 'POST') return reply(405, { code: 'METHOD_NOT_ALLOWED' }, origin);
   if (origin && !allowedOrigins.has(origin)) return reply(403, { code: 'ORIGIN_NOT_ALLOWED' }, origin);
@@ -112,6 +113,7 @@ Deno.serve(async request => {
     const account = JSON.parse(configuredAccount) as ServiceAccount;
     if (account.type !== 'service_account' || !account.client_email || !account.private_key || !account.project_id)
       return reply(503, { code: 'OCR_NOT_CONFIGURED' }, origin);
+    stage = 'reserving-quota';
     const hashBytes = await crypto.subtle.digest('SHA-256', new Uint8Array(image).buffer);
     const hash = Array.from(new Uint8Array(hashBytes), b => b.toString(16).padStart(2, '0')).join('');
     const privileged = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
@@ -127,13 +129,16 @@ Deno.serve(async request => {
     }
 
     // One request, one image, one billable feature. No retries or automatic crops.
+    stage = 'google-token';
     const accessToken = await googleToken(account);
+    stage = 'google-vision';
     const response = await fetch(GOOGLE_VISION_URL, {
       method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ requests: [{ image: { content: base64(image) }, features: [{ type: 'DOCUMENT_TEXT_DETECTION' }], imageContext: { languageHints: ['es'] } }] }),
       signal: AbortSignal.timeout(25000),
     });
     if (!response.ok) throw Error(`GOOGLE_VISION_FAILED (${response.status})`);
+    stage = 'google-response';
     const result = (await response.json()).responses?.[0];
     if (!result || result.error) throw Error(`GOOGLE_VISION_FAILED (${result?.error?.code ?? 'empty'})`);
     return reply(200, {
@@ -145,7 +150,7 @@ Deno.serve(async request => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const code = /GOOGLE_AUTH_FAILED/.test(message) ? 'GOOGLE_AUTH_FAILED' : /TimeoutError|timed out|abort/i.test(message) ? 'OCR_TIMEOUT' : 'GOOGLE_VISION_FAILED';
-    console.error('OCR server failure', code); // never log credentials or ticket contents
+    console.error('OCR server failure', code, stage, /\((\d{3})\)/.exec(message)?.[1] ?? 'no-http-status'); // never log credentials or ticket contents
     return reply(502, { code, message: 'No se pudo completar el análisis de la fotografía.' }, origin);
   }
 });
