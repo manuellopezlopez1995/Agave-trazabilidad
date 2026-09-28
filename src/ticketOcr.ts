@@ -81,7 +81,8 @@ export function parseTicketPasses(passes:Pass[]):TicketReading{
   return complete*100+Number(consistent)*150+Number(!!f.folio)*15+Number(!!f.date)*5+Number(!!f.time)*5+(/SALIDA|EGRESO|DEPARTURE/.test(result.name)?1:0);
  };
  results.sort((a,b)=>score(b)-score(a));const chosen=results[0].reading;
- chosen.diagnostics!.validation.unshift(`Pesada seleccionada: ${results[0].name}; pesadas detectadas: ${results.map(r=>r.name).join(', ')}`);
+ const detected=results.filter(r=>r.name!=='sin encabezado'||r.reading.fields.gross!==undefined||r.reading.fields.tare!==undefined||r.reading.fields.printedNet!==undefined);
+ chosen.diagnostics!.validation.unshift(`Pesada seleccionada: ${results[0].name}; pesadas detectadas: ${detected.map(r=>r.name).join(', ')}`);
  // Full OCR text remains visible in ADMIN diagnostics, even when one pesada wins.
  chosen.diagnostics!.passes=passes.map((p,i)=>({name:p.name??`intento OCR ${i+1}`,text:p.text,confidence:p.confidence}));
  return chosen;
