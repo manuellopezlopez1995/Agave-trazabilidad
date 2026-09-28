@@ -137,7 +137,13 @@ Deno.serve(async request => {
       body: JSON.stringify({ requests: [{ image: { content: base64(image) }, features: [{ type: 'DOCUMENT_TEXT_DETECTION' }], imageContext: { languageHints: ['es'] } }] }),
       signal: AbortSignal.timeout(25000),
     });
-    if (!response.ok) throw Error(`GOOGLE_VISION_FAILED (${response.status})`);
+    if (!response.ok) {
+      const failure = await response.json().catch(() => null);
+      const status = String(failure?.error?.status ?? 'UNKNOWN').slice(0, 48);
+      const reason = String(failure?.error?.details?.find?.((detail: { reason?: string }) => detail.reason)?.reason ?? 'UNSPECIFIED').slice(0, 48);
+      console.error('Google Vision response', response.status, status, reason); // structured codes only, never the response body
+      throw Error(`${reason === 'BILLING_DISABLED' ? 'GOOGLE_BILLING_DISABLED' : 'GOOGLE_VISION_FAILED'} (${response.status})`);
+    }
     stage = 'google-response';
     const result = (await response.json()).responses?.[0];
     if (!result || result.error) throw Error(`GOOGLE_VISION_FAILED (${result?.error?.code ?? 'empty'})`);
@@ -149,7 +155,7 @@ Deno.serve(async request => {
     }, origin);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const code = /GOOGLE_AUTH_FAILED/.test(message) ? 'GOOGLE_AUTH_FAILED' : /TimeoutError|timed out|abort/i.test(message) ? 'OCR_TIMEOUT' : 'GOOGLE_VISION_FAILED';
+    const code = /GOOGLE_BILLING_DISABLED/.test(message) ? 'GOOGLE_BILLING_DISABLED' : /GOOGLE_AUTH_FAILED/.test(message) ? 'GOOGLE_AUTH_FAILED' : /TimeoutError|timed out|abort/i.test(message) ? 'OCR_TIMEOUT' : 'GOOGLE_VISION_FAILED';
     console.error('OCR server failure', code, stage, /\((\d{3})\)/.exec(message)?.[1] ?? 'no-http-status'); // never log credentials or ticket contents
     return reply(502, { code, message: 'No se pudo completar el análisis de la fotografía.' }, origin);
   }
