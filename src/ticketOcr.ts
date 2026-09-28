@@ -1,7 +1,7 @@
 import type {Worker} from 'tesseract.js';
 
 export type TicketFields={gross?:number;tare?:number;printedNet?:number;folio?:string;date?:string;time?:string};
-export type TicketFailureCode='OCR_ENGINE_FAILED'|'OCR_EMPTY_RESULT'|'FIELD_NOT_FOUND'|'LOW_CONFIDENCE'|'VALIDATION_FAILED'|'PARSER_FAILED'|'ASSET_LOAD_FAILED'|'OCR_TIMEOUT'|'OCR_NOT_CONFIGURED'|'OCR_OFFLINE'|'VISION_MONTHLY_LIMIT'|'VISION_USER_LIMIT'|'TRIP_ACCESS_DENIED'|'GOOGLE_AUTH_FAILED'|'GOOGLE_VISION_FAILED'|'OCR_BUDGET_UNAVAILABLE';
+export type TicketFailureCode='OCR_ENGINE_FAILED'|'OCR_EMPTY_RESULT'|'FIELD_NOT_FOUND'|'LOW_CONFIDENCE'|'VALIDATION_FAILED'|'PARSER_FAILED'|'ASSET_LOAD_FAILED'|'OCR_TIMEOUT'|'OCR_NOT_CONFIGURED'|'OCR_OFFLINE'|'VISION_MONTHLY_LIMIT'|'VISION_USER_LIMIT'|'TRIP_ACCESS_DENIED'|'GOOGLE_AUTH_FAILED'|'GOOGLE_VISION_FAILED'|'GOOGLE_BILLING_DISABLED'|'OCR_BUDGET_UNAVAILABLE';
 export type TicketReading={fields:TicketFields;netKg?:number;confidence:number;fieldConfidence:Partial<Record<keyof TicketFields,number>>;warnings:string[];diagnostics?:TicketDiagnostics};
 type Key=keyof TicketFields;
 type Candidate={value:string|number;quality:number;pass:string;line:string;reason:string};
