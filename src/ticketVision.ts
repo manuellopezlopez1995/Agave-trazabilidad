@@ -1,5 +1,5 @@
 import type {Session} from '@supabase/supabase-js';
-import {parseTicketPasses,TicketReading,TicketDiagnostics} from './ticketOcr';
+import {parseTicketPasses,exifOrientation,TicketReading,TicketDiagnostics} from './ticketOcr';
 
 const url=process.env.EXPO_PUBLIC_SUPABASE_URL?.trim();
 const key=process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim();
@@ -24,7 +24,10 @@ export async function readTicketWithVision(blob:Blob,tripId:string,session:Sessi
  const confidence=confidences.length?Math.round(confidences.reduce((a:number,b:number)=>a+b,0)/confidences.length):0;
  const reading=parseTicketPasses([{name:'Google Vision, fotografía original',text:result.rawText,confidence}]);
  reading.diagnostics!.engineStatus='COMPLETADO';reading.diagnostics!.stage='OCR de servidor y parser completados';
- reading.diagnostics!.image={sha256:result.imageSha256,bytes:blob.size};
+ const page=pages[0];
+ reading.diagnostics!.image={sha256:result.imageSha256,bytes:blob.size,width:Number(page?.width)||undefined,height:Number(page?.height)||undefined,orientation:await exifOrientation(blob)};
+ reading.diagnostics!.passes[0].width=reading.diagnostics!.image.width;
+ reading.diagnostics!.passes[0].height=reading.diagnostics!.image.height;
  reading.diagnostics!.passes[0].status='OK';
  if(!result.rawText.trim())reading.diagnostics!.engineError={code:'OCR_EMPTY_RESULT',message:'Google Vision no devolvió texto'};
  onProgress?.(reading.diagnostics!);
