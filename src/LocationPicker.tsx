@@ -30,7 +30,8 @@ export default function LocationPicker(props:Props){
  useEffect(()=>{
   if(!open||Platform.OS!=='web'||!mapRef.current)return;
   let active=true,instance:any;
-  void import('leaflet').then(L=>{
+  try{
+   const L=Platform.OS==='web'?require('leaflet'):null;
    if(!active||!mapRef.current)return;
    const initial=candidateRef.current??validPoint(propsRef.current.latitude,propsRef.current.longitude);
    instance=L.map(mapRef.current,{zoomControl:true}).setView(initial?[initial.latitude,initial.longitude]:[20.7,-102.3],initial?16:8);
@@ -39,7 +40,7 @@ export default function LocationPicker(props:Props){
    marker.current=L.circleMarker(initial?[initial.latitude,initial.longitude]:[20.7,-102.3],{radius:9,color:'#164B3A',fillColor:'#e5a32b',fillOpacity:1,opacity:initial?1:0}).addTo(instance);
    instance.on('click',(event:any)=>{const previous=candidateRef.current;const current=propsRef.current;choose({latitude:event.latlng.lat,longitude:event.latlng.lng,name:previous?.name||current.name,address:previous?.address||current.address});marker.current?.setStyle({opacity:1});});
    setTimeout(()=>{if(active)instance.invalidateSize();},100);
-  }).catch(()=>{if(active)setError('No se pudo abrir el mapa. Puedes escribir las coordenadas en el formulario.');});
+  }catch{if(active)setError('No se pudo abrir el mapa. Puedes escribir las coordenadas en el formulario.');}
   return()=>{active=false;request.current?.abort();instance?.remove();if(map.current===instance){map.current=null;marker.current=null;}};
  },[open]);
  const search=async()=>{
