@@ -1,0 +1,65 @@
+import {supabase} from './backend';
+import {pendingEvidence,syncEvidence,PendingEvidence} from './offlineEvidence';
+export const practiceMode=typeof window!=='undefined'&&new URLSearchParams(window.location.search).get('practice')==='1';
+export type OfflineOperation={id:string;actorId:string;organizationId:string;kind:'harvest'|'lot'|'trip'|'field_arrival';entityId:string;capturedAt:string;queuedAt:string;payload:Record<string,unknown>;blob?:Blob;error?:string};
+export type OfflineDraft={id:string;actorId:string;organizationId:string;entityId:string;kind:'ticket'|'brix';type?:'ORIGIN'|'DESTINATION';blob:Blob;mimeType:string;capturedAt:string;latitude?:number;longitude?:number};
+type Store='operations'|'snapshots'|'drafts';
+function open():Promise<IDBDatabase>{return new Promise((resolve,reject)=>{const r=indexedDB.open('agave-offline-journal',1);r.onupgradeneeded=()=>{for(const name of ['operations','snapshots','drafts'])r.result.createObjectStore(name,{keyPath:'id'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+async function transaction<T>(name:Store,mode:IDBTransactionMode,run:(store:IDBObjectStore)=>IDBRequest):Promise<T>{
+ const database=await open();return new Promise((resolve,reject)=>{const tx=database.transaction(name,mode);let value:T;const request=run(tx.objectStore(name));request.onsuccess=()=>{value=request.result};tx.oncomplete=()=>{database.close();resolve(value)};tx.onerror=tx.onabort=()=>{database.close();reject(tx.error??request.error??Error('No se pudo guardar en el dispositivo'))}});
+}
+export async function operations(actor:string,org?:string){return (await transaction<OfflineOperation[]>('operations','readonly',s=>s.getAll())).filter(x=>x.actorId===actor&&(!org||x.organizationId===org)).sort((a,b)=>a.queuedAt.localeCompare(b.queuedAt)||a.id.localeCompare(b.id))}
+export async function enqueueOperation(op:OfflineOperation){await transaction('operations','readwrite',s=>s.add(op))}
+export async function drafts(actor:string,org:string){return (await transaction<OfflineDraft[]>('drafts','readonly',s=>s.getAll())).filter(x=>x.actorId===actor&&x.organizationId===org)}
+export async function saveDraft(draft:OfflineDraft){await transaction('drafts','readwrite',s=>s.put(draft))}
+export async function removeDraft(id:string){await transaction('drafts','readwrite',s=>s.delete(id))}
+const cacheId=(actor:string)=>`${actor}:${practiceMode?'practice':'operations'}`;
+export async function saveOfflineView(actor:string,view:Record<string,any>){await transaction('snapshots','readwrite',s=>s.put({id:cacheId(actor),savedAt:new Date().toISOString(),view}))}
+export async function readOfflineView(actor:string):Promise<{savedAt:string;view:Record<string,any>}|undefined>{return transaction('snapshots','readonly',s=>s.get(cacheId(actor)))}
+export async function originalUpload(bucket:string,path:string,blob:Blob){
+ if(!supabase)throw Error('Falta configurar Supabase');
+ const {error}=await supabase.storage.from(bucket).upload(path,blob,{contentType:blob.type,upsert:false});
+ if(!error)return;
+ const {data,error:readError}=await supabase.storage.from(bucket).download(path);
+ if(readError||!data||data.size!==blob.size)throw error;
+ const digest=async(b:Blob)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await b.arrayBuffer()))).join(',');
+ if(await digest(data)!==await digest(blob))throw Error('El archivo existente no coincide con la fotografía original');
+}
+const running=new Map<string,Promise<void>>();
+export async function syncJournal(actor:string,org:string){
+ const key=`${actor}:${org}`;const active=running.get(key);if(active)return active;
+ const run=async()=>{
+  if(!supabase||!navigator.onLine)throw Error('Sin conexión. Los pendientes siguen guardados.');
+  const commands=await operations(actor,org),photos=(await pendingEvidence()).filter(x=>x.userId===actor&&x.organizationId===org);
+  const work=[...commands.map(op=>({at:op.queuedAt,id:op.id,op})),...photos.map(photo=>({at:photo.queuedAt??photo.capturedAt,id:photo.id,photo}))].sort((a,b)=>a.at.localeCompare(b.at)||a.id.localeCompare(b.id));
+  for(const item of work){
+   if('photo' in item){await syncEvidence(org,actor,undefined,item.id);continue}
+   const op=item.op;
+   try{
+    if(op.kind==='lot'){if(!op.blob)throw Error('Falta la foto original de °Brix');await originalUpload('harvest-evidence',String(op.payload.path),op.blob)}
+    const {data,error}=await supabase.rpc('apply_offline_operation',{p_event_id:op.id,p_kind:op.kind,p_entity_id:op.entityId,p_captured_at:op.capturedAt,p_payload:op.payload});
+    if(error)throw error;if(!data)throw Error('El servidor no confirmó el evento');
+    await transaction('operations','readwrite',s=>s.delete(op.id));
+   }catch(error){op.error=error instanceof Error?error.message:String((error as {message?:string})?.message??error);await transaction('operations','readwrite',s=>s.put(op));throw Error(`Pendiente conservado: ${op.error}`)}
+  }
+ };
+ const promise=(async()=>{if(typeof navigator!=='undefined'&&navigator.locks)await navigator.locks.request(`agave-sync:${key}`,run);else await run()})().finally(()=>running.delete(key));running.set(key,promise);return promise;
+}
+// Pending data are visibly provisional. Only the server can confirm state transitions.
+export function projectOfflineView(view:Record<string,any>,ops:OfflineOperation[],photos:PendingEvidence[]){
+ const v=structuredClone(view);v.harvests??=[];v.lots??=[];v.trips??=[];v.harvestPhotos??=[];v.tripLots??=[];
+ for(const op of ops){
+  if(op.kind==='harvest'){
+   const h=v.harvests.find((h:any)=>h.id===op.entityId);if(h){h.status=op.payload.expected==='ASSIGNED'?'IN_PROGRESS':'HARVESTED';h.pending=true;
+    if(h.status==='HARVESTED'){for(const l of v.lots.filter((l:any)=>l.harvest_order_id===h.id)){l.status='HARVESTED';const t=v.trips.find((t:any)=>t.harvest_order_id===h.id);if(t&&!v.tripLots.some((tl:any)=>tl.trip_id===t.id&&tl.agave_lot_id===l.id))v.tripLots.push({trip_id:t.id,agave_lot_id:l.id,loaded_weight_kg:null})}}
+   }
+  }else if(op.kind==='lot'){
+   const id=op.payload.lot_id||op.id,h=v.harvests.find((h:any)=>h.id===op.entityId),existing=v.lots.find((l:any)=>l.id===id);
+   const l={id,trace_code:existing?.trace_code??'LOTE PENDIENTE',harvest_order_id:op.entityId,farm_id:h?.farm_id,status:'OPEN',agave_count:op.payload.count,average_brix:op.payload.brix,actual_weight_kg:null,pending:true};
+   if(existing)Object.assign(existing,l);else v.lots.push(l);
+   v.harvestPhotos.push({id:op.id,harvest_order_id:op.entityId,agave_lot_id:id,storage_bucket:'harvest-evidence',storage_path:op.payload.path,pending:true});
+  }else{const t=v.trips.find((t:any)=>t.id===op.entityId);if(t){t.status=op.kind==='field_arrival'?'AT_FIELD':op.payload.expected==='AT_FIELD'?'LOADING':'IN_TRANSIT';t.pending=true}}
+ }
+ for(const p of photos){if(p.kind==='harvest'&&!v.harvestPhotos.some((x:any)=>x.storage_path===p.path))v.harvestPhotos.push({id:p.id,harvest_order_id:p.entityId,storage_bucket:p.bucket,storage_path:p.path,pending:true})}
+ return v;
+}

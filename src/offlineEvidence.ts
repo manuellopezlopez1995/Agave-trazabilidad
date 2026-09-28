@@ -1,25 +1,26 @@
 import {supabase} from './backend';
 
-export type PendingEvidence={id:string;kind:'harvest'|'delivery'|'weighing'|'safety';photoKind?:'PPE'|'TRUCK';organizationId:string;entityId:string;userId:string;bucket:string;path:string;mimeType:string;blob:Blob;capturedAt:string;latitude?:number;longitude?:number;legibilityConfirmed:boolean;weighing?:{gross:number;tare:number;ticketNumber:string;weighingType:string;ocrReading?:Record<string,unknown>;correctedFields?:string[];ticketSha256?:string}};
+export type PendingEvidence={id:string;queuedAt?:string;kind:'harvest'|'delivery'|'weighing'|'safety';photoKind?:'PPE'|'TRUCK';organizationId:string;entityId:string;userId:string;bucket:string;path:string;mimeType:string;blob:Blob;capturedAt:string;latitude?:number;longitude?:number;legibilityConfirmed:boolean;weighing?:{gross:number;tare:number;ticketNumber:string;weighingType:string;ocrReading?:Record<string,unknown>;correctedFields?:string[];ticketSha256?:string}};
 const name='agave-pending-evidence';
 function db():Promise<IDBDatabase>{return new Promise((resolve,reject)=>{const request=indexedDB.open(name,1);request.onupgradeneeded=()=>request.result.createObjectStore('pending',{keyPath:'id'});request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)})}
-async function operation<T>(mode:IDBTransactionMode,run:(store:IDBObjectStore,resolve:(v:T)=>void,reject:(error:unknown)=>void)=>void):Promise<T>{const database=await db();return new Promise((resolve,reject)=>{const tx=database.transaction('pending',mode);tx.oncomplete=()=>database.close();tx.onerror=()=>reject(tx.error);run(tx.objectStore('pending'),resolve,reject)})}
-export async function queueEvidence(item:PendingEvidence){await operation<void>('readwrite',(store,resolve,reject)=>{const request=store.add(item);request.onsuccess=()=>resolve();request.onerror=()=>reject(request.error)})}
+async function operation<T>(mode:IDBTransactionMode,run:(store:IDBObjectStore,resolve:(v:T)=>void,reject:(error:unknown)=>void)=>void):Promise<T>{const database=await db();return new Promise((resolve,reject)=>{const tx=database.transaction('pending',mode);let value:T;tx.oncomplete=()=>{database.close();resolve(value)};tx.onerror=tx.onabort=()=>{database.close();reject(tx.error)};run(tx.objectStore('pending'),v=>{value=v},error=>{tx.abort();reject(error)})})}
+
+export async function queueEvidence(item:PendingEvidence){await operation<void>('readwrite',(store,resolve,reject)=>{const request=store.add({...item,queuedAt:item.queuedAt??new Date().toISOString()});request.onsuccess=()=>resolve();request.onerror=()=>reject(request.error)})}
 export async function pendingEvidence():Promise<PendingEvidence[]>{return operation('readonly',(store,resolve,reject)=>{const request=store.getAll();request.onsuccess=()=>resolve(request.result as PendingEvidence[]);request.onerror=()=>reject(request.error)})}
 async function removeEvidence(id:string){await operation<void>('readwrite',(store,resolve,reject)=>{const request=store.delete(id);request.onsuccess=()=>resolve();request.onerror=()=>reject(request.error)})}
 
 // Un identificador y ruta estables vuelven seguro reintentar después de una respuesta perdida.
-export async function syncEvidence(organizationId:string,userId:string,onProgress?:(remaining:number)=>void){
+export async function syncEvidence(organizationId:string,userId:string,onProgress?:(remaining:number)=>void,onlyId?:string){
  if(!supabase||!navigator.onLine)throw Error('Necesitas conexión para sincronizar');
  const items=await pendingEvidence();let synced=0;
  for(const item of items){
-  if(item.userId!==userId||item.organizationId!==organizationId)continue;
+  if(item.userId!==userId||item.organizationId!==organizationId||onlyId&&item.id!==onlyId)continue;
   const table=item.kind==='harvest'?'harvest_evidence':item.kind==='delivery'?'delivery_evidence':item.kind==='safety'?'trip_arrival_safety_evidence':'weighings';
   const column=item.kind==='weighing'?'ticket_storage_path':'storage_path';
   const {data:existing,error:readError}=await supabase.from(table).select('id').eq(column,item.path).maybeSingle();if(readError)throw readError;
   if(!existing){
    const {error:uploadError}=await supabase.storage.from(item.bucket).upload(item.path,item.blob,{contentType:item.mimeType,upsert:false});
-   if(uploadError){const {data:alreadyThere,error:downloadError}=await supabase.storage.from(item.bucket).download(item.path);if(downloadError||!alreadyThere||alreadyThere.size!==item.blob.size)throw uploadError}
+   if(uploadError){const {data:alreadyThere,error:downloadError}=await supabase.storage.from(item.bucket).download(item.path);if(downloadError||!alreadyThere||alreadyThere.size!==item.blob.size)throw uploadError;const hash=async(b:Blob)=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await b.arrayBuffer()))).join(',');if(await hash(alreadyThere)!==await hash(item.blob))throw Error('La fotografía existente no coincide con el original')}
    const common={storage_bucket:item.bucket,storage_path:item.path,captured_at:item.capturedAt,latitude:item.latitude,longitude:item.longitude};
    let data:Record<string,unknown>;
    if(item.kind==='harvest')data={...common,harvest_order_id:item.entityId,evidence_type:'PHOTO',mime_type:item.mimeType,file_size_bytes:item.blob.size,uploaded_by:item.userId};

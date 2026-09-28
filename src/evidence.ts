@@ -34,13 +34,13 @@ function decodeBase64(input:string):ArrayBuffer{
 
 export async function photographTicket():Promise<TicketDraft|null>{
  if(Platform.OS!=='web'){const permission=await ImagePicker.requestCameraPermissionsAsync();if(!permission.granted)throw Error('Activa el permiso de cámara')}
- const picture=await ImagePicker.launchCameraAsync({quality:.9,base64:true,exif:false,allowsEditing:false});
+ const picture=await ImagePicker.launchCameraAsync({quality:1,base64:true,exif:true,allowsEditing:false});
  if(picture.canceled)return null;
  const asset=picture.assets[0];if(!asset?.base64)throw Error('La cámara no devolvió la fotografía');
  const bytes=decodeBase64(asset.base64);if(bytes.byteLength===0||bytes.byteLength>maxEvidenceBytes)throw Error('La fotografía debe pesar menos de 12 MB');
  const mimeType=asset.mimeType==='image/png'?'image/png':'image/jpeg';
  let latitude:number|undefined,longitude:number|undefined;
- try{const permission=await Location.getForegroundPermissionsAsync();if(permission.granted){const p=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced});latitude=p.coords.latitude;longitude=p.coords.longitude}}catch{/* El GPS no es obligatorio. */}
+ try{const permission=await Location.getForegroundPermissionsAsync();if(permission.granted){const p=await Promise.race([Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced}),new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('GPS no disponible')),5000))]);latitude=p.coords.latitude;longitude=p.coords.longitude}}catch{/* El GPS no es obligatorio. */}
  return {bytes,blob:new Blob([bytes],{type:mimeType}),mimeType,capturedAt:new Date().toISOString(),latitude,longitude};
 }
 
@@ -53,7 +53,7 @@ export async function photographSafetyEquipment(organizationId:string,tripId:str
  const bytes=decodeBase64(asset.base64);if(!bytes.byteLength||bytes.byteLength>maxEvidenceBytes)throw Error('La foto original debe pesar menos de 12 MB');
  const mimeType=asset.mimeType==='image/png'?'image/png':'image/jpeg';
  const draft:TicketDraft={bytes,blob:new Blob([bytes],{type:mimeType}),mimeType,capturedAt:new Date().toISOString()};
- try{const permission=await Location.getForegroundPermissionsAsync();if(permission.granted){const point=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced});draft.latitude=point.coords.latitude;draft.longitude=point.coords.longitude}}catch{/* GPS opcional. */}
+ try{const permission=await Location.getForegroundPermissionsAsync();if(permission.granted){const point=await Promise.race([Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced}),new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('GPS no disponible')),5000))]);draft.latitude=point.coords.latitude;draft.longitude=point.coords.longitude}}catch{/* GPS opcional. */}
  const question=photoKind==='TRUCK'?'Confirma que la fotografía muestra el camión de este viaje al llegar al destino.':'Confirma que apareces en la fotografía con todo el equipo requerido para este destino.';
  const confirmed=Platform.OS==='web'?window.confirm(question)
   :await new Promise<boolean>(resolve=>Alert.alert('Fotografía de llegada',question,[{text:'Repetir foto',onPress:()=>resolve(false)},{text:'Confirmar',onPress:()=>resolve(true)}],{cancelable:false}));
@@ -72,7 +72,7 @@ export async function saveConfirmedTicket(draft:TicketDraft,organizationId:strin
  if(![organizationId,tripId,userId].every(id=>uuidPattern.test(id)))throw Error('La ruta de evidencia no es válida');
  const path=`${organizationId}/${tripId}/${userId}/${Crypto.randomUUID()}.${draft.mimeType==='image/png'?'png':'jpg'}`;
  const result:EvidenceResult={bucket:'weighing-tickets',path,mimeType:draft.mimeType,size:draft.bytes.byteLength,capturedAt:draft.capturedAt,latitude:draft.latitude,longitude:draft.longitude,legibilityConfirmed:true};
- if(Platform.OS==='web'&&!navigator.onLine){await queueEvidence({id:path,kind:'weighing',organizationId,entityId:tripId,userId,bucket:result.bucket,path,mimeType:draft.mimeType,blob:draft.blob,capturedAt:draft.capturedAt,latitude:draft.latitude,longitude:draft.longitude,legibilityConfirmed:true,weighing});return {...result,queued:true}}
+ if(Platform.OS==='web'){await queueEvidence({id:path,kind:'weighing',organizationId,entityId:tripId,userId,bucket:result.bucket,path,mimeType:draft.mimeType,blob:draft.blob,capturedAt:draft.capturedAt,latitude:draft.latitude,longitude:draft.longitude,legibilityConfirmed:true,weighing});return {...result,queued:true}}
  const {error}=await supabase.storage.from(result.bucket).upload(path,draft.bytes,{contentType:draft.mimeType,upsert:false});if(error)throw error;
  return result;
 }
@@ -86,7 +86,7 @@ export async function captureEvidence(kind:Kind,organizationId:string,entityId:s
   const permission=await ImagePicker.requestCameraPermissionsAsync();
   if(!permission.granted)throw Error('Activa el permiso de cámara para registrar evidencia');
  }
- const picture=await ImagePicker.launchCameraAsync({quality:.75,base64:true,exif:false,allowsEditing:false});
+ const picture=await ImagePicker.launchCameraAsync({quality:1,base64:true,exif:true,allowsEditing:false});
  if(picture.canceled)return null;
  const asset=picture.assets[0];if(!asset?.base64)throw Error('La cámara no devolvió la imagen');
  if(kind!=='harvest'){
@@ -105,9 +105,9 @@ export async function captureEvidence(kind:Kind,organizationId:string,entityId:s
   ?await Location.requestForegroundPermissionsAsync()
   :await Location.getForegroundPermissionsAsync();
  if(locationPermission.granted){
-  try{const p=await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced});latitude=p.coords.latitude;longitude=p.coords.longitude}catch{/* La foto sigue válida sin GPS. */}
+  try{const p=await Promise.race([Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Balanced}),new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('GPS no disponible')),5000))]);latitude=p.coords.latitude;longitude=p.coords.longitude}catch{/* La foto sigue válida sin GPS. */}
  }
- if(Platform.OS==='web'&&!navigator.onLine){await queueEvidence({id:path,kind,organizationId,entityId,userId,bucket,path,mimeType,blob:new Blob([bytes],{type:mimeType}),capturedAt,latitude,longitude,legibilityConfirmed:kind!=='harvest',weighing});return {bucket,path,mimeType,size:bytes.byteLength,latitude,longitude,capturedAt,legibilityConfirmed:kind!=='harvest',queued:true}}
+ if(Platform.OS==='web'){await queueEvidence({id:path,kind,organizationId,entityId,userId,bucket,path,mimeType,blob:new Blob([bytes],{type:mimeType}),capturedAt,latitude,longitude,legibilityConfirmed:kind!=='harvest',weighing});return {bucket,path,mimeType,size:bytes.byteLength,latitude,longitude,capturedAt,legibilityConfirmed:kind!=='harvest',queued:true}}
  const {error}=await supabase.storage.from(bucket).upload(path,bytes,{contentType:mimeType,upsert:false});
  if(error)throw error;
  return {bucket,path,mimeType,size:bytes.byteLength,latitude,longitude,capturedAt,legibilityConfirmed:kind!=='harvest'};
