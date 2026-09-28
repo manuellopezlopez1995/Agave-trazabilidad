@@ -44,6 +44,22 @@ export async function photographTicket():Promise<TicketDraft|null>{
  return {bytes,blob:new Blob([bytes],{type:mimeType}),mimeType,capturedAt:new Date().toISOString(),latitude,longitude};
 }
 
+export async function photographSafetyEquipment(organizationId:string,tripId:string,userId:string):Promise<EvidenceResult|null>{
+ if(!supabase)throw Error('Falta configurar Supabase');
+ if(![organizationId,tripId,userId].every(id=>uuidPattern.test(id)))throw Error('La ruta de evidencia no es válida');
+ const draft=await photographTicket();if(!draft)return null;
+ const confirmed=Platform.OS==='web'?window.confirm('Confirma que apareces en la fotografía con todo el equipo requerido para este destino.')
+  :await new Promise<boolean>(resolve=>Alert.alert('Equipo de protección','Confirma que apareces con todo el equipo requerido.',[{text:'Repetir foto',onPress:()=>resolve(false)},{text:'Confirmar',onPress:()=>resolve(true)}],{cancelable:false}));
+ if(!confirmed)return null;
+ const path=`${organizationId}/${tripId}/${userId}/${Crypto.randomUUID()}.${draft.mimeType==='image/png'?'png':'jpg'}`;
+ const result:EvidenceResult={bucket:'arrival-safety',path,mimeType:draft.mimeType,size:draft.bytes.byteLength,capturedAt:draft.capturedAt,latitude:draft.latitude,longitude:draft.longitude,legibilityConfirmed:true};
+ // En la PWA se guarda primero en IndexedDB; si la conexión se corta durante
+ // el upload o INSERT, la fotografía original permanece lista para reintento.
+ if(Platform.OS==='web'){await queueEvidence({id:path,kind:'safety',organizationId,entityId:tripId,userId,bucket:result.bucket,path,mimeType:draft.mimeType,blob:draft.blob,capturedAt:draft.capturedAt,legibilityConfirmed:true});return {...result,queued:true}}
+ const {error}=await supabase.storage.from(result.bucket).upload(path,draft.bytes,{contentType:draft.mimeType,upsert:false});if(error)throw error;
+ return result;
+}
+
 export async function saveConfirmedTicket(draft:TicketDraft,organizationId:string,tripId:string,userId:string,weighing:{gross:number;tare:number;ticketNumber:string;weighingType:string;ocrReading:Record<string,unknown>;correctedFields:string[];ticketSha256:string}):Promise<EvidenceResult>{
  if(!supabase)throw Error('Falta configurar Supabase');
  if(![organizationId,tripId,userId].every(id=>uuidPattern.test(id)))throw Error('La ruta de evidencia no es válida');
