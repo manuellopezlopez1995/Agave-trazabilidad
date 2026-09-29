@@ -18,8 +18,11 @@ function validateConfiguration(){
 const sessionName=typeof window!=='undefined'?new URLSearchParams(window.location.search).get('session'):null;
 const sessionStorageKey=sessionName&&/^offline-(admin|crew|driver)$/.test(sessionName)?`agave-${sessionName}-auth`:undefined;
 export const configurationError=validateConfiguration();
+// Supabase invite/recovery links return a short-lived session in the URL.
+// Capture the callback type before the client removes the fragment.
+export const authCallbackType=typeof window!=='undefined'?new URLSearchParams(window.location.hash.slice(1)).get('type'):null;
 export const supabase=configurationError?null:createClient(url!,key!,{
- auth:{...(sessionStorageKey?{storageKey:sessionStorageKey}:{}),storage:AsyncStorage,autoRefreshToken:true,persistSession:true,detectSessionInUrl:false}
+ auth:{...(sessionStorageKey?{storageKey:sessionStorageKey}:{}),storage:AsyncStorage,autoRefreshToken:true,persistSession:true,detectSessionInUrl:typeof window!=='undefined'}
 });
 
 // Offline reopening uses only this session's existing local credential. It grants
