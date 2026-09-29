@@ -1,6 +1,6 @@
 /** Small standalone, multi-page PDF for the administrative finance tables. */
 const enc=new TextEncoder();
-const safe=(x:string)=>x.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,'?').replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
+const safe=(x:string)=>x.replace(/[·–—]/g,' - ').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,'').replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
 export function financePdf(title:string,lines:string[]):Blob{
  const objects:string[]=[];const add=(value:string)=>{objects.push(value);return objects.length};
  const catalog=add(''),root=add(''),font=add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>');
