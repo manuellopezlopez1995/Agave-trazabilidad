@@ -67,7 +67,7 @@ export async function photographSafetyEquipment(organizationId:string,tripId:str
  return result;
 }
 
-export async function saveConfirmedTicket(draft:TicketDraft,organizationId:string,tripId:string,userId:string,weighing:{gross:number;tare:number;ticketNumber:string;weighingType:string;ocrReading:Record<string,unknown>;correctedFields:string[];ticketSha256:string}):Promise<EvidenceResult>{
+export async function saveConfirmedTicket(draft:TicketDraft,organizationId:string,tripId:string,userId:string,weighing:{gross:number;tare:number;ticketNumber:string;weighingType:string;ocrReading:Record<string,unknown>;correctedFields:string[];ticketSha256:string;weighedAt?:string}):Promise<EvidenceResult>{
  if(!supabase)throw Error('Falta configurar Supabase');
  if(![organizationId,tripId,userId].every(id=>uuidPattern.test(id)))throw Error('La ruta de evidencia no es válida');
  const path=`${organizationId}/${tripId}/${userId}/${Crypto.randomUUID()}.${draft.mimeType==='image/png'?'png':'jpg'}`;
