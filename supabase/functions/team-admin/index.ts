@@ -15,6 +15,8 @@ function reply(status: number, payload: Record<string, unknown>, origin: string 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const roles = new Set(['ADMIN', 'CREW_LEADER', 'DRIVER']);
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const appUrl = 'https://manuellopezlopez1995.github.io/Agave-trazabilidad/';
+const practiceOrganizationId = '4b2d20d5-9f98-4a47-8f20-dfafdb58d9f0';
 
 Deno.serve(async request => {
   const origin = request.headers.get('origin');
@@ -73,7 +75,8 @@ Deno.serve(async request => {
         const { data: crew } = await scoped.from('crews').select('id,active,crew_leader_id').eq('id', crewId).eq('organization_id', organizationId).maybeSingle();
         if (!crew?.active || crew.crew_leader_id) return reply(400, { error: 'La cuadrilla ya tiene jefe o no está activa' }, origin);
       }
-      const { data: invited, error: inviteError } = await privileged.auth.admin.inviteUserByEmail(email);
+      const redirectTo = organizationId === practiceOrganizationId ? `${appUrl}?practice=1` : appUrl;
+      const { data: invited, error: inviteError } = await privileged.auth.admin.inviteUserByEmail(email, { redirectTo });
       if (inviteError || !invited.user) return reply(400, { error: inviteError?.message ?? 'No se pudo enviar la invitación' }, origin);
       const { error: attachError } = await privileged.rpc('team_attach_invite', {
         p_org: organizationId, p_actor: actor, p_user: invited.user.id,
