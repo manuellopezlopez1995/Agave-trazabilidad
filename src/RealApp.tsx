@@ -26,7 +26,7 @@ type Profile={id:string;full_name:string;role:Role;status:string;vehicle_plate:s
 type Farm={id:string;code:string;name:string;municipality:string|null;state:string;area_hectares:number|null;plantation_id:string|null;latitude:number|null;longitude:number|null;location_reference:string|null};
 type Destination={id:string;name:string;buyer_name:string;address:string|null;latitude:number;longitude:number;active:boolean;safety_photo_required:boolean;safety_requirements:string[]};
 type SafetyPhoto={photo_kind:'PPE'|'TRUCK';id:string;trip_id:string;storage_path:string;captured_at:string;uploaded_by:string;evidence_code:string};
-type Crew={id:string;code:string|null;name:string;crew_leader_id:string|null};
+type Crew={id:string;code:string|null;name:string;crew_leader_id:string|null;active:boolean};
 type Harvest={id:string;trace_code:string;farm_id:string;crew_id:string|null;status:string;scheduled_date:string|null;completed_at:string|null;notes:string|null};
 type ScheduleRow={id:string;farmId:string;crewId:string;date:string;destinationId:string};
 type Lot={id:string;trace_code:string;harvest_order_id:string;farm_id:string;status:string;agave_count:number|null;average_brix:number|null;actual_weight_kg:number|null};
@@ -130,7 +130,7 @@ export default function RealApp(){
   }
   const [f,c,h,l,t,tl,d,w,hp,dp,dr]=await Promise.all([
    supabase.from('farms').select('id,code,name,municipality,state,area_hectares,plantation_id,latitude,longitude,location_reference').eq('organization_id',org).order('created_at',{ascending:false}),
-   supabase.from('crews').select('id,code,name,crew_leader_id').eq('organization_id',org),
+   supabase.from('crews').select('id,code,name,crew_leader_id,active').eq('organization_id',org),
    supabase.from('harvest_orders').select('id,trace_code,farm_id,crew_id,status,scheduled_date,completed_at,notes').eq('organization_id',org).order('created_at',{ascending:false}),
    supabase.from('agave_lots').select('id,trace_code,harvest_order_id,farm_id,status,agave_count,average_brix,actual_weight_kg').eq('organization_id',org).order('created_at',{ascending:false}),
    supabase.from('trips').select('id,trace_code,plantation_folio,plantation_trip_number,origin_farm_id,harvest_order_id,driver_id,assigned_at,at_field_at,status,destination_id,destination_name,destination_label,destination_address,destination_latitude,destination_longitude,origin_latitude,origin_longitude,origin_reference,departed_at,arrived_at,delivered_at,vehicle_plate').eq('organization_id',org).order('created_at',{ascending:false}),

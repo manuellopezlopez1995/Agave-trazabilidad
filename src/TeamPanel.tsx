@@ -4,7 +4,7 @@ import {supabase} from './backend';
 
 type Role='ADMIN'|'CREW_LEADER'|'DRIVER';
 type Member={id:string;full_name:string;email:string;role:Role;status:string;vehicle_plate:string|null;memberActive:boolean;crewId:string|null};
-type Crew={id:string;name:string;crew_leader_id:string|null};
+type Crew={id:string;name:string;crew_leader_id:string|null;active:boolean};
 type Form={fullName:string;email:string;role:Role;plate:string;crewId:string};
 const empty:Form={fullName:'',email:'',role:'DRIVER',plate:'',crewId:''};
 const names:Record<Role,string>={ADMIN:'Administrador',CREW_LEADER:'Jefe de cuadrilla',DRIVER:'Chofer'};
@@ -43,7 +43,7 @@ export default function TeamPanel({organizationId,actorId,crews,onChanged}:{orga
    <Text style={s.label}>Correo electrónico</Text><TextInput accessibilityLabel="Correo electrónico" style={s.input} keyboardType="email-address" autoCapitalize="none" editable={!editing} value={form.email} onChangeText={v=>set('email',v)}/>
    <Text style={s.label}>Rol</Text><View style={s.options}>{roles.map(role=><Pressable key={role} accessibilityRole="button" accessibilityLabel={`Rol ${names[role]}`} style={[s.option,form.role===role&&s.selected]} onPress={()=>setForm(f=>({...f,role,plate:role==='DRIVER'?f.plate:'',crewId:role==='CREW_LEADER'?f.crewId:''}))}><Text style={form.role===role?s.selectedText:s.optionText}>{names[role]}</Text></Pressable>)}</View>
    {form.role==='DRIVER'&&<><Text style={s.label}>Placas del camión</Text><TextInput accessibilityLabel="Placas del camión" style={s.input} autoCapitalize="characters" value={form.plate} onChangeText={v=>set('plate',v)}/></>}
-   {form.role==='CREW_LEADER'&&<><Text style={s.label}>Cuadrilla</Text><View style={s.options}><Pressable accessibilityRole="button" accessibilityLabel="Cuadrilla sin asignar" style={[s.option,!form.crewId&&s.selected]} onPress={()=>set('crewId','')}><Text style={!form.crewId?s.selectedText:s.optionText}>Sin asignar</Text></Pressable>{crews.filter(c=>!c.crew_leader_id||c.crew_leader_id===editing?.id).map(c=><Pressable key={c.id} accessibilityRole="button" accessibilityLabel={`Cuadrilla ${c.name}`} style={[s.option,form.crewId===c.id&&s.selected]} onPress={()=>set('crewId',c.id)}><Text style={form.crewId===c.id?s.selectedText:s.optionText}>{c.name}</Text></Pressable>)}</View></>}
+   {form.role==='CREW_LEADER'&&<><Text style={s.label}>Cuadrilla</Text><View style={s.options}><Pressable accessibilityRole="button" accessibilityLabel="Cuadrilla sin asignar" style={[s.option,!form.crewId&&s.selected]} onPress={()=>set('crewId','')}><Text style={!form.crewId?s.selectedText:s.optionText}>Sin asignar</Text></Pressable>{crews.filter(c=>c.active&&(!c.crew_leader_id||c.crew_leader_id===editing?.id)).map(c=><Pressable key={c.id} accessibilityRole="button" accessibilityLabel={`Cuadrilla ${c.name}`} style={[s.option,form.crewId===c.id&&s.selected]} onPress={()=>set('crewId',c.id)}><Text style={form.crewId===c.id?s.selectedText:s.optionText}>{c.name}</Text></Pressable>)}</View></>}
    <Pressable style={s.button} onPress={save} disabled={busy}><Text style={s.buttonText}>{busy?'Guardando…':editing?'Guardar cambios':'Enviar invitación y crear'}</Text></Pressable>
    <Pressable style={s.secondary} onPress={()=>setShowForm(false)}><Text style={s.optionText}>Cancelar</Text></Pressable>
   </View>}
