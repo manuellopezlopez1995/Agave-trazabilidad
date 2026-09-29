@@ -280,7 +280,7 @@ export default function RealApp(){
    const tripIds=[...new Set((linksResult.data??[]).map(l=>l.trip_id))];
    const [tr,wr,dr,he]=await Promise.all([
     tripIds.length?supabase.from('trips').select('id,trace_code,plantation_folio,driver_id,status,destination_name,departed_at,arrived_at,vehicle_plate').in('id',tripIds).eq('organization_id',organizationId):Promise.resolve({data:[],error:null}),
-    tripIds.length?supabase.from('weighings').select('id,trip_id,weighing_type,gross_weight_kg,tare_weight_kg,net_weight_kg,ticket_number,storage_bucket,ticket_storage_path,legibility_confirmed,captured_at,recorded_by,latitude,longitude,evidence_code').in('trip_id',tripIds):Promise.resolve({data:[],error:null}),
+    tripIds.length?supabase.from('weighings').select('id,trip_id,weighing_type,gross_weight_kg,tare_weight_kg,net_weight_kg,ticket_number,storage_bucket,ticket_storage_path,legibility_confirmed,captured_at,weighed_at,recorded_by,latitude,longitude,evidence_code').in('trip_id',tripIds):Promise.resolve({data:[],error:null}),
     tripIds.length?supabase.from('deliveries').select('id,trace_code,trip_id,status,recipient_company,accepted_weight_kg,rejected_weight_kg,received_by_name,received_at,rejection_reason').in('trip_id',tripIds).eq('organization_id',organizationId):Promise.resolve({data:[],error:null}),
     supabase.from('harvest_evidence').select('id,agave_lot_id,storage_bucket,storage_path,captured_at,uploaded_by,latitude,longitude,evidence_code').eq('harvest_order_id',h.id)
    ]);for(const r of [tr,wr,dr,he])check(r.error);
