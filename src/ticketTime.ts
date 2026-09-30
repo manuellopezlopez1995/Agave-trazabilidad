@@ -1,4 +1,11 @@
 // The scale's printed local time is distinct from photo capture and confirmation.
+export function confirmedTicketTime(dateText:string,timeText:string,timeZone='America/Mexico_City'){
+ const date=dateText.trim(),time=timeText.trim();
+ if(!date&&!time)return undefined;
+ const value=ticketWeighedAt(date,time,timeZone);
+ if(!value)throw Error('Revisa la fecha y hora del ticket: usa DD/MM/AAAA y HH:MM. Completa ambos campos o déjalos vacíos si no aparecen en la fotografía.');
+ return value;
+}
 export function ticketWeighedAt(dateText?:string|null,timeText?:string|null,timeZone='America/Mexico_City'):string|undefined{
  if(!dateText||!timeText)return undefined;
  const date=dateText.trim().match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);

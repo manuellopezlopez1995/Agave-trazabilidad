@@ -1,0 +1,64 @@
+-- PRUEBA OFFLINE only. All fixture changes are rolled back.
+begin;
+create temporary table pilot_checks(result text);
+do $$
+declare org uuid:='4b2d20d5-9f98-4a47-8f20-dfafdb58d9f0';
+ admin uuid:='f0824571-4d65-449f-94ca-43141e712b3b';
+ driver uuid:='c84a1022-ab25-4114-85de-f286d1b06e69';
+ driver2 uuid:='c4a1987d-088f-4f96-89ff-ac2d78e9096f';
+ leader uuid:='6925ae58-1b47-4565-9be0-849997d7c51d';
+ crew uuid:=gen_random_uuid(); h uuid; t uuid; event uuid:=gen_random_uuid(); result jsonb;
+ actor uuid; real_before jsonb; report jsonb; f uuid; dest uuid;
+begin
+ select jsonb_agg(to_jsonb(x) order by id) into real_before from public.trips x where organization_id<>org;
+ select id into strict f from public.farms where organization_id=org and latitude is not null and active limit 1;
+ select id into strict dest from public.destinations where organization_id=org and active limit 1;
+ perform set_config('request.jwt.claim.sub',admin::text,true);set local role authenticated;
+ insert into public.crews(id,organization_id,name,code,created_by)
+ values(crew,org,'PRUEBA OFFLINE auditoría piloto','AUD-'||left(crew::text,8),admin);
+ result:=public.schedule_harvest_batch(org,jsonb_build_array(jsonb_build_object('farm_id',f,'crew_id',crew,'scheduled_date',public.organization_work_date(org),'destination_id',dest)));
+ h:=(result->0->>'id')::uuid;
+ select id into strict t from public.trips where harvest_order_id=h;
+ if (select count(*) from public.trips where harvest_order_id=h)<>1 then raise exception 'Duplicate trip';end if;
+ report:=public.finance_report(org);
+ if (select (x->>'amount_mxn')::numeric from jsonb_array_elements(report->'lines') x where x->>'folio'='99092802-2')<>3250 then raise exception 'Wrong trip amount';end if;
+ reset role;
+ insert into pilot_checks values('PASS: ADMIN schedules test harvest with one trip, destination and coordinates; finance 500 × 6.50 = 3250');
+ perform set_config('request.jwt.claim.sub',driver::text,true);set local role authenticated;
+ if public.claim_harvest_trip(t)<>'ASSIGNED' or public.claim_harvest_trip(t)<>'ASSIGNED' then raise exception 'Claim replay';end if;
+ if (select vehicle_plate from public.trips where id=t)<>(select vehicle_plate from public.profiles where id=driver) then raise exception 'Plate';end if;
+ perform set_config('request.jwt.claim.sub',driver2::text,true);
+ begin perform public.claim_harvest_trip(t);raise exception 'Second driver stole trip';exception when check_violation then null;end;
+ if exists(select 1 from public.trips where id=t) then raise exception 'Second driver reads assigned trip';end if;
+ if exists(select 1 from public.farms where organization_id<>org) then raise exception 'Test-only account reads real org';end if;
+ begin perform public.finance_report(org);raise exception 'Driver finance access';exception when insufficient_privilege then null;end;
+ begin perform public.team_can_delete(org,leader);raise exception 'Driver team access';exception when insufficient_privilege then null;end;
+ reset role;
+ insert into pilot_checks values('PASS: claim replay, saved plates, second driver denied; test-only account cannot see real farms, assigned foreign trip, finances or team management');
+ perform set_config('request.jwt.claim.sub',driver::text,true);set local role authenticated;
+ perform public.mark_trip_at_field(t,event,now(),20.5,-102.5);
+ perform public.mark_trip_at_field(t,event,now(),20.5,-102.5);
+ if (select count(*) from public.trip_status_events where trip_id=t and new_status='AT_FIELD')<>1 then raise exception 'Arrival duplicated';end if;
+ begin perform public.advance_harvest(h);raise exception 'Driver harvest write';exception when insufficient_privilege then null;end;
+ begin perform public.approve_trip_closure(t);raise exception 'Driver closure';exception when insufficient_privilege then null;end;
+ reset role;
+ perform set_config('request.jwt.claim.sub',admin::text,true);set local role authenticated;
+ begin perform public.approve_trip_closure(t);raise exception 'Incomplete closure';exception when raise_exception then if sqlerrm='Incomplete closure' then raise;end if;end;
+ reset role;
+ insert into pilot_checks values('PASS: captured arrival is idempotent; DRIVER cannot modify harvest or approve closure; ADMIN cannot close incomplete trip');
+ foreach actor in array array[driver,leader] loop
+  perform set_config('request.jwt.claim.sub',actor::text,true);set local role authenticated;
+  begin perform public.team_manage_member(org,driver2,'Unauthorized','DRIVER','TEST-29',null,false);raise exception 'Non-admin manages users';exception when insufficient_privilege then null;end;
+  reset role;
+ end loop;
+ perform set_config('request.jwt.claim.sub',admin::text,true);set local role authenticated;
+ if (public.team_can_delete(org,admin)->>'allowed')::boolean then raise exception 'Self deletion';end if;
+ reset role;
+ if (select jsonb_agg(to_jsonb(x) order by id) from public.trips x where organization_id<>org) is distinct from real_before then raise exception 'Real trips changed';end if;
+ insert into pilot_checks values('PASS: only ADMIN manages accounts; self deletion blocked; real trips unchanged');
+ if not exists(select 1 from pg_indexes where schemaname='public' and indexname='weighings_one_per_trip_stage') then raise exception 'Missing atomic weighing constraint';end if;
+ if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in ('audit_trip_change','enforce_evidence_and_variance','link_completed_lot_to_harvest_trip','reserve_harvest_trip','rls_auto_enable','validate_harvest_trip_link') and (has_function_privilege('anon',p.oid,'EXECUTE') or has_function_privilege('authenticated',p.oid,'EXECUTE'))) then raise exception 'Internal trigger RPC';end if;
+ insert into pilot_checks values('PASS: atomic weighing index exists and six internal trigger functions are not callable by API roles');
+end $$;
+select * from pilot_checks;
+rollback;
