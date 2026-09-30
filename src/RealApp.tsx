@@ -120,7 +120,12 @@ export default function RealApp(){
  const load=useCallback(async()=>{if(!supabase||!session)return;setError('');try{
   if(Platform.OS==='web'){const restored=await restoreView(session.user.id);if(!navigator.onLine){setOfflineReady(restored&&await verifyOfflineShell());if(!restored)throw Error('Antes de ir al predio, abre tu sesión con conexión para preparar los datos de este dispositivo.');return}setOfflineReady(false);setOfflinePreparing(true)}
   const {data:p,error:pe}=await supabase.from('profiles').select('id,full_name,role,status,vehicle_plate').eq('id',session.user.id).single();check(pe);if(!p||p.status!=='ACTIVE')throw Error('Tu perfil no está activo.');setProfile(p as Profile);setMyPlateInput(p.vehicle_plate??'');
-  const {data:context,error:me}=await supabase.rpc('offline_context',{p_practice:practiceMode});check(me);if(!context?.organization_id)throw Error('No tienes una organización activa.');const org=context.organization_id;setOrganizationId(org);setOperationalTimezone(context.timezone);
+  const {data:context,error:me}=await supabase.rpc('offline_context',{p_practice:practiceMode});
+  if(me&&!practiceMode&&Platform.OS==='web'){
+   const {data:practiceContext,error:practiceError}=await supabase.rpc('offline_context',{p_practice:true});
+   if(!practiceError&&practiceContext?.organization_id){const next=new URL(window.location.href);next.searchParams.set('practice','1');window.location.replace(next.toString());return}
+  }
+  check(me);if(!context?.organization_id)throw Error('No tienes una organización activa.');const org=context.organization_id;setOrganizationId(org);setOperationalTimezone(context.timezone);
   let loadedTeam:Profile[]=[];let loadedDestinations:Destination[]=[];
   if(p.role==='ADMIN'){
    const {data:members,error:membersError}=await supabase.from('organization_members').select('profile_id').eq('organization_id',org);
