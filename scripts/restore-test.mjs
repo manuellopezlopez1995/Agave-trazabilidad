@@ -6,6 +6,7 @@ import {resolve,join} from 'node:path';
 
 const folder=resolve(process.argv[2]||'');
 const manifest=JSON.parse(await readFile(join(folder,'manifest.json'),'utf8'));
+if(manifest.formatVersion!==2||manifest.aclIncluded!==true)throw Error('El respaldo antiguo omite permisos. Crea una nueva exportación antes de restaurar');
 const target=process.env.TEST_SUPABASE_URL?.replace(/\/$/,'');
 const key=process.env.TEST_SUPABASE_SERVICE_ROLE_KEY;
 const database=process.env.TEST_DATABASE_URL;
@@ -18,7 +19,11 @@ const verify=(buf,expected)=>{if(createHash('sha256').update(buf).digest('hex')!
 const dump=await readFile(join(folder,manifest.database.file));verify(dump,manifest.database.sha256);
 if(!Array.isArray(manifest.buckets)||!Array.isArray(manifest.objects))throw Error('El manifiesto no enumera buckets y archivos; crea un nuevo respaldo completo');
 for(const item of manifest.objects){const bytes=await readFile(join(folder,'objects',item.bucket,...item.path.split('/')));verify(bytes,item.sha256);if(bytes.length!==item.size)throw Error('Tamaño incorrecto')}
-const restored=spawnSync('pg_restore',['--dbname',database,'--clean','--if-exists','--no-owner','--no-acl',join(folder,manifest.database.file)],{stdio:'inherit'});
+// Never clean an existing database. Require an empty application schema and
+// compatible Supabase roles supplied by the separate test environment.
+const preflight=spawnSync('psql',['--dbname',database,'--no-psqlrc','--tuples-only','--no-align','--set','ON_ERROR_STOP=1','--command',"select (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p','v','m'))=0 and (select count(*) from pg_roles where rolname in ('anon','authenticated','service_role','supabase_auth_admin','supabase_storage_admin'))=5"],{encoding:'utf8'});
+if(preflight.status!==0||preflight.stdout.trim()!=='t')throw Error('El destino necesita esquema public vacío y roles Supabase compatibles. No se borrará ninguna base existente');
+const restored=spawnSync('pg_restore',['--dbname',database,'--exit-on-error','--single-transaction','--no-owner',join(folder,manifest.database.file)],{stdio:'inherit'});
 if(restored.status!==0)throw Error('La restauración de la base de prueba falló');
 for(const bucket of manifest.buckets){
  const response=await fetch(`${target}/storage/v1/bucket/${encodeURIComponent(bucket.id)}`,{headers:{Authorization:`Bearer ${key}`,apikey:key}});
@@ -34,4 +39,4 @@ for(const item of manifest.objects){
  if(!downloaded.ok)throw Error(`No se pudo leer archivo restaurado (${downloaded.status})`);
  verify(Buffer.from(await downloaded.arrayBuffer()),item.sha256);
 }
-console.log(`Restauración y lectura de ${manifest.objects.length} imágenes verificadas en proyecto de prueba`);
+console.log(`Importación y hashes de ${manifest.objects.length} archivos verificados. Recuperación NO aprobada: faltan cotejo de registros/relaciones/ACL y pruebas RLS en la base restaurada.`);

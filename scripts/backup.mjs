@@ -11,7 +11,9 @@ const target=resolve(process.argv[2]||`backup-${new Date().toISOString().replace
 if(!base||!key||!database)throw Error('Configura SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY y DATABASE_URL en el entorno privado');
 if(!/^https:\/\/[\w.-]+\.supabase\.co$/.test(base))throw Error('URL de Supabase no reconocida');
 await mkdir(join(target,'objects'),{recursive:true});
-const dump=spawnSync('pg_dump',['--format=custom','--no-owner','--no-acl','--file',join(target,'database.dump'),database],{stdio:'inherit'});
+// Preserve ACLs: losing EXECUTE grants/revocations changes the security model.
+// This dump requires a compatible, isolated Supabase/Postgres environment.
+const dump=spawnSync('pg_dump',['--format=custom','--no-owner','--file',join(target,'database.dump'),database],{stdio:'inherit'});
 if(dump.status!==0)throw Error('pg_dump falló; no se aceptará un respaldo parcial');
 const request=async(path,options={})=>{
  const response=await fetch(`${base}/storage/v1${path}`,{...options,headers:{Authorization:`Bearer ${key}`,apikey:key,...options.headers}});
@@ -31,7 +33,7 @@ async function list(bucket,prefix=''){
    const object=await request(`/object/authenticated/${bucket}/${path.split('/').map(encodeURIComponent).join('/')}`);
    const bytes=Buffer.from(await object.arrayBuffer());
    const file=join(target,'objects',bucket,...path.split('/'));
-   await mkdir(dirname(file),{recursive:true});await writeFile(file,bytes,{flag:'wx'});
+   await mkdir(dirname(file),{recursive:true});await writeFile(file,bytes,{flag:'wx',mode:0o600});
    files.push({bucket,path,size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
   }
   if(rows.length<100)break;
@@ -39,6 +41,6 @@ async function list(bucket,prefix=''){
 }
 for(const bucket of buckets)await list(bucket.id);
 const dumpBytes=await readFile(join(target,'database.dump'));
-const manifest={createdAt:new Date().toISOString(),projectUrl:base,database:{file:'database.dump',size:dumpBytes.length,sha256:createHash('sha256').update(dumpBytes).digest('hex')},buckets:buckets.map(({id,name,public:publicAccess,file_size_limit,allowed_mime_types})=>({id,name,public:publicAccess,file_size_limit,allowed_mime_types})),objects:files};
+const manifest={formatVersion:2,aclIncluded:true,recoveryVerified:false,createdAt:new Date().toISOString(),projectUrl:base,database:{file:'database.dump',size:dumpBytes.length,sha256:createHash('sha256').update(dumpBytes).digest('hex')},buckets:buckets.map(({id,name,public:publicAccess,file_size_limit,allowed_mime_types})=>({id,name,public:publicAccess,file_size_limit,allowed_mime_types})),objects:files};
 await writeFile(join(target,'manifest.json'),JSON.stringify(manifest,null,2),{flag:'wx',mode:0o600});
-console.log(`Respaldo completo: ${files.length} archivos; manifiesto ${join(target,'manifest.json')}`);
+console.log(`Exportación creada: ${files.length} archivos; manifiesto ${join(target,'manifest.json')}. Recuperación pendiente de restauración y verificación de registros, relaciones y permisos.`);
