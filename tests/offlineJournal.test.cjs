@@ -2,6 +2,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 require('fake-indexeddb/auto');
 Object.defineProperty(globalThis,'navigator',{value:{onLine:true},configurable:true});
 globalThis.window={location:{search:''}};
+process.env.EXPO_PUBLIC_PRACTICE_WORKSPACE_ENABLED='true';
 const receipts=new Map(),files=new Map();let dropResponse=false,applied=0,server,port;
 const backend={supabase:{
  rpc:async(name,p)=>{try{const r=await fetch(`http://127.0.0.1:${port}/rpc`,{method:'POST',body:JSON.stringify({name,p})});return {data:await r.json(),error:null}}catch(e){return {data:null,error:e}}},
@@ -35,6 +36,18 @@ test('upload retry compares original bytes, not just size',async()=>{const a=new
 test('lot and closed-harvest projections keep linked evidence and no invented weights',()=>{const now=new Date().toISOString(),base={harvests:[{id:'h',farm_id:'f',status:'IN_PROGRESS'}],trips:[{id:'t',harvest_order_id:'h'}],lots:[]};const ops=[{id:'l',kind:'lot',entityId:'h',payload:{count:830,brix:36,path:'p'}},{id:'c',kind:'harvest',entityId:'h',payload:{expected:'IN_PROGRESS'}}];const result=journal.projectOfflineView(base,ops,[]);assert.equal(result.lots[0].actual_weight_kg,null);assert.equal(result.lots[0].status,'HARVESTED');assert.equal(result.harvestPhotos[0].agave_lot_id,'l');assert.equal(result.tripLots[0].agave_lot_id,'l');assert.equal(base.lots.length,0)});
 
 test('installed PWA remembers practice workspace when start_url loses query',()=>{const values=new Map();globalThis.localStorage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v)};const reopen=search=>{window.location.search=search;delete loaded.offlineJournal;return load('offlineJournal').practiceMode};assert.equal(reopen('?practice=1'),true);assert.equal(reopen(''),true);assert.equal(reopen('?session=offline-admin'),false);assert.equal(reopen('?practice=0'),false);assert.equal(reopen(''),false);});
+
+test('production ignores old practice links and caches without deleting pending originals',async()=>{
+ const actor='production-transition',org='laboratory',id=crypto.randomUUID();
+ const values=new Map([['agave-workspace:default','1']]);
+ globalThis.localStorage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v)};
+ await journal.saveDraft({id,actorId:actor,organizationId:org,entityId:'trip',kind:'ticket',blob:new Blob(['PENDING ORIGINAL']),mimeType:'image/png',capturedAt:new Date().toISOString()});
+ process.env.EXPO_PUBLIC_PRACTICE_WORKSPACE_ENABLED='false';window.location.search='?practice=1';delete loaded.offlineJournal;
+ const production=load('offlineJournal');assert.equal(production.practiceWorkspaceEnabled,false);assert.equal(production.practiceMode,false);
+ assert.equal(values.get('agave-workspace:default'),'1');assert.equal(new TextDecoder().decode((await production.drafts(actor,org))[0].bytes),'PENDING ORIGINAL');
+ window.location.search='';delete loaded.offlineJournal;assert.equal(load('offlineJournal').practiceMode,false);
+ process.env.EXPO_PUBLIC_PRACTICE_WORKSPACE_ENABLED='true';delete loaded.offlineJournal;window.location.search='';
+});
 
 test('concurrent photo synchronization creates one stable database record',async()=>{
  const rows=new Map();backend.supabase.from=()=>({select:()=>({eq:(column,value)=>({maybeSingle:async()=>({data:[...rows.values()].find(x=>x[column]===value)??null,error:null})})}),insert:async data=>{if(rows.has(data.id))return {error:Error('duplicate key')};rows.set(data.id,data);return {error:null}}});
