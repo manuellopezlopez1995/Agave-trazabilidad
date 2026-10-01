@@ -11,7 +11,10 @@ export function offlineErrorMessage(error:unknown){
 }
 // Installed PWAs reopen at start_url without query parameters. Remember the
 // chosen workspace per named session; this preference grants no access.
-export const practiceMode=(()=>{if(typeof window==='undefined')return false;const params=new URLSearchParams(window.location.search),explicit=params.get('practice'),key=`agave-workspace:${params.get('session')??'default'}`;try{if(explicit==='0'||explicit==='1')localStorage.setItem(key,explicit);return (explicit??localStorage.getItem(key))==='1'}catch{return explicit==='1'}})();
+// Production builds always select operations, including old installed links and
+// persisted laboratory preferences. This does not erase local queues or drafts.
+export const practiceWorkspaceEnabled=process.env.EXPO_PUBLIC_PRACTICE_WORKSPACE_ENABLED==='true';
+export const practiceMode=(()=>{if(!practiceWorkspaceEnabled||typeof window==='undefined')return false;const params=new URLSearchParams(window.location.search),explicit=params.get('practice'),key=`agave-workspace:${params.get('session')??'default'}`;try{if(explicit==='0'||explicit==='1')localStorage.setItem(key,explicit);return (explicit??localStorage.getItem(key))==='1'}catch{return explicit==='1'}})();
 export async function prepareOfflineShell(){
  if(!navigator.onLine)throw Error('Prepara el dispositivo antes de perder señal');
  if(!('serviceWorker' in navigator)||typeof caches==='undefined')throw Error('Este navegador no permite preparar la aplicación sin señal');
