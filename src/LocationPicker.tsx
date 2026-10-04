@@ -7,6 +7,8 @@ type Point={latitude:number;longitude:number;name?:string;address?:string;accura
 type Props={latitude:string;longitude:string;name:string;address:string;onConfirm:(point:Point)=>void};
 type Feature={geometry?:{coordinates?:number[]};properties?:Record<string,string>};
 const tileUrl=process.env.EXPO_PUBLIC_MAP_TILE_URL||'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+// Browser key: restrict its referrers and grant only basemap access. Never use an account secret.
+const satelliteKey=process.env.EXPO_PUBLIC_ARCGIS_BASEMAP_KEY?.trim();
 const button={padding:14,backgroundColor:'#164B3A',borderRadius:12,marginTop:8};
 function validPoint(latitude:string,longitude:string):Point|null{
  if(!latitude.trim()||!longitude.trim())return null;
@@ -23,6 +25,8 @@ function featurePoint(feature:Feature):Point|null{
 export default function LocationPicker(props:Props){
  const [open,setOpen]=useState(false),[candidate,setCandidate]=useState<Point|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[results,setResults]=useState<Point[]>([]);
  const mapRef=useRef<HTMLDivElement>(null),map=useRef<any>(null),marker=useRef<any>(null),request=useRef<AbortController|null>(null);
+ const [view,setView]=useState<'map'|'satellite'>('map'),[tileError,setTileError]=useState('');
+ const baseLayer=useRef<any>(null);
  const propsRef=useRef(props);propsRef.current=props;
  const candidateRef=useRef(candidate);candidateRef.current=candidate;
  const saved=validPoint(props.latitude,props.longitude);
@@ -36,13 +40,28 @@ export default function LocationPicker(props:Props){
    const initial=candidateRef.current??validPoint(propsRef.current.latitude,propsRef.current.longitude);
    instance=L.map(mapRef.current,{zoomControl:true}).setView(initial?[initial.latitude,initial.longitude]:[20.7,-102.3],initial?16:8);
    map.current=instance;
-   L.tileLayer(tileUrl,{attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',maxZoom:19}).addTo(instance);
    marker.current=L.circleMarker(initial?[initial.latitude,initial.longitude]:[20.7,-102.3],{radius:9,color:'#164B3A',fillColor:'#e5a32b',fillOpacity:1,opacity:initial?1:0}).addTo(instance);
    instance.on('click',(event:any)=>{const previous=candidateRef.current;const current=propsRef.current;choose({latitude:event.latlng.lat,longitude:event.latlng.lng,name:previous?.name||current.name,address:previous?.address||current.address});marker.current?.setStyle({opacity:1});});
    setTimeout(()=>{if(active)instance.invalidateSize();},100);
   }catch{if(active)setError('No se pudo abrir el mapa. Puedes escribir las coordenadas en el formulario.');}
-  return()=>{active=false;request.current?.abort();instance?.remove();if(map.current===instance){map.current=null;marker.current=null;}};
+  return()=>{active=false;request.current?.abort();instance?.remove();if(map.current===instance){map.current=null;marker.current=null;baseLayer.current=null;}};
  },[open]);
+ useEffect(()=>{
+  const instance=map.current;if(!open||!instance)return;
+  setTileError('');
+  const L=require('leaflet');
+  const layer=view==='satellite'&&satelliteKey
+   ?require('esri-leaflet').basemapLayer({
+     urlTemplate:'https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token='+encodeURIComponent(satelliteKey),
+     options:{maxZoom:19,attribution:'Esri, Maxar, Earthstar Geographics, and the GIS User Community',attributionUrl:'https://static.arcgis.com/attribution/World_Imagery'}
+    })
+   :L.tileLayer(tileUrl,{attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',maxZoom:19});
+  // Replace only the background: retain center, zoom and the selected point.
+  baseLayer.current=layer;
+  const failed=()=>setTileError('No se pudieron cargar algunas imágenes. Comprueba tu conexión o vuelve a la vista Mapa. El punto seleccionado se conserva.');
+  layer.on('tileerror',failed);layer.addTo(instance);
+  return()=>{layer.off('tileerror',failed);if(instance.hasLayer(layer))instance.removeLayer(layer);if(baseLayer.current===layer)baseLayer.current=null;};
+ },[open,view]);
  const search=async()=>{
   if(Platform.OS!=='web'||!navigator.onLine){setError('Conéctate para buscar un lugar.');return;}
   const term=query.trim();if(term.length<3){setError('Escribe al menos tres caracteres del nombre o dirección.');return;}
@@ -69,8 +88,12 @@ export default function LocationPicker(props:Props){
    {open&&<><TextInput accessibilityLabel="Nombre o dirección del lugar" placeholder="Nombre o dirección del lugar" value={query} onChangeText={setQuery} onSubmitEditing={()=>void search()} style={{borderWidth:1,borderColor:'#cbd5cc',padding:12,marginTop:10,borderRadius:9}}/>
     <Pressable style={button} disabled={busy} onPress={()=>void search()}><Text style={{color:'white',textAlign:'center'}}>Buscar</Text></Pressable>
     {results.map((result,index)=><Pressable key={result.latitude+'-'+result.longitude+'-'+index} onPress={()=>{choose(result);setResults([]);marker.current?.setStyle({opacity:1});}} style={{padding:10,borderBottomWidth:1,borderColor:'#d9e1d3'}}><Text style={{color:'#164B3A',fontWeight:'bold'}}>{result.name}</Text><Text>{result.address}</Text></Pressable>)}
-    <div ref={mapRef} aria-label="Mapa interactivo para elegir el punto exacto" style={{height:320,marginTop:12,borderRadius:12}}/>
-    <Text style={{marginTop:8}}>Acerca el mapa y toca el punto exacto. Datos de búsqueda: Photon/OpenStreetMap. Mapa: © OpenStreetMap contributors.</Text>
+    <View style={{flexDirection:'row',gap:8}}>{(['map','satellite'] as const).map(mode=><Pressable key={mode} accessibilityRole="button" accessibilityState={{selected:view===mode,disabled:mode==='satellite'&&!satelliteKey}} disabled={mode==='satellite'&&!satelliteKey} onPress={()=>setView(mode)} style={{...button,flex:1,backgroundColor:view===mode?'#164B3A':'#eef1ea',borderWidth:1,borderColor:'#164B3A',opacity:mode==='satellite'&&!satelliteKey?0.5:1}}><Text style={{textAlign:'center',fontWeight:'bold',color:view===mode?'white':'#164B3A'}}>{mode==='map'?'Mapa':'Satelital'}</Text></Pressable>)}</View>
+    {!satelliteKey&&<Text style={{marginTop:8}}>La vista satelital está pendiente de activación.</Text>}
+    <div ref={mapRef} aria-label="Mapa interactivo para elegir el punto exacto" style={{height:380,marginTop:12,borderRadius:12}}/>
+    {!!tileError&&<Text accessibilityRole="alert" style={{color:'#a52828',marginTop:8}}>{tileError}</Text>}
+    <Text style={{marginTop:8}}>Acerca el mapa y toca el punto exacto. Cambiar de vista conserva tu selección. Datos de búsqueda: Photon/OpenStreetMap.</Text>
+    {view==='satellite'&&<Text style={{marginTop:8}}>Las imágenes pueden ser anteriores a la fecha actual. Revisa el acceso de la huerta o fábrica antes de confirmar.</Text>}
     <Pressable onPress={()=>void Linking.openURL('https://www.openstreetmap.org/fixthemap')}><Text style={{color:'#164B3A',textDecorationLine:'underline'}}>Reportar un problema del mapa</Text></Pressable>
    </>}
   </>}
