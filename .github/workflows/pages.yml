@@ -28,7 +28,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: cp .env.example .env
-      - run: npm run typecheck && npm run build:web
+      - run: npm run typecheck && node --test tests/locationPicker.test.cjs && npm run build:web
+        env:
+          EXPO_PUBLIC_ARCGIS_BASEMAP_KEY: ${{ secrets.ARCGIS_BASEMAP_KEY }}
       - name: Preparar ruta de GitHub Pages
         run: |
           python3 - <<'PY'
